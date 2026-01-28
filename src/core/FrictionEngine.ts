@@ -18,11 +18,11 @@ export interface FrictionConfig {
 
 export const DEFAULT_FRICTION_CONFIG: FrictionConfig = {
     enabled: true,
-    baseResistance: 0.12,        // Subtle drag, not sluggish
-    pressureInfluence: 0.3,      // Moderate pressure effect
-    velocityDamping: 0.5,        // Momentum helps overcome friction
+    baseResistance: 0.5,         // Strong drag - clearly feels like pen on paper
+    pressureInfluence: 0.6,      // Strong pressure effect - press harder = more drag
+    velocityDamping: 0.3,        // Less momentum = more friction feel
     grainDirection: 0,           // Horizontal grain
-    grainStrength: 0.15          // Subtle grain effect
+    grainStrength: 0.25          // Clear grain effect
 };
 
 export interface FrictionPoint {

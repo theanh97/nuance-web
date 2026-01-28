@@ -84,7 +84,7 @@ export class GeminiInkRenderer {
     }
 
     public destroy() {
-        this.stopWetLoop();
+        // this.stopWetLoop(); // Wet ink disabled
         if (this.soundEngine && this.soundEngine.dispose) {
             this.soundEngine.dispose();
         }
@@ -189,9 +189,10 @@ export class GeminiInkRenderer {
 
     public setFrictionLevel(level: number) {
         // level: 0.0 (no friction) to 1.0 (max friction)
+        // At 50% slider = 0.3 (noticeable), at 100% = 0.6 (very strong)
         if (this.frictionEngine) {
             this.frictionEngine.setConfig({
-                baseResistance: level * 0.3 // Scale to reasonable range
+                baseResistance: level * 0.6
             });
         }
     }
@@ -351,46 +352,11 @@ export class GeminiInkRenderer {
         this.ctx.restore();
     }
 
-    // --- Wet Ink Simulation (Bleed) ---
-    private wetLoopId: number | null = null;
-
-    private startWetLoop() {
-        if (this.wetLoopId) cancelAnimationFrame(this.wetLoopId);
-
-        const loop = () => {
-            if (!this.isDrawing) return;
-
-            // Check if stationary
-            if (this.points.length > 0) {
-                const now = performance.now();
-                const lastPoint = this.points[this.points.length - 1];
-                const timeSinceLast = now - lastPoint.timestamp;
-
-                // If stationary for > 50ms, start bleeding (increasing pressure)
-                if (timeSinceLast > 50) {
-                    // Bleed heavily for Fountain, slightly for Marker, none for Pencil
-                    // We can reuse current config or check sound profile? 
-                    // Let's use config.pressureInfluence as a proxy or just simulate generic bleed
-
-                    // Artificial pressure growth
-                    // Cap at some max to prevent explosion
-                    if (lastPoint.pressure < 2.0) {
-                        lastPoint.pressure += 0.01; // Slow growth
-                        this.requestRedraw();
-                    }
-                }
-            }
-            this.wetLoopId = requestAnimationFrame(loop);
-        };
-        this.wetLoopId = requestAnimationFrame(loop);
-    }
-
-    private stopWetLoop() {
-        if (this.wetLoopId) {
-            cancelAnimationFrame(this.wetLoopId);
-            this.wetLoopId = null;
-        }
-    }
+    // --- Wet Ink Simulation (Bleed) - DISABLED FOR NOW ---
+    // Kept for future implementation
+    // private wetLoopId: number | null = null;
+    // private startWetLoop() { ... }
+    // private stopWetLoop() { ... }
 
     addPoint(x: number, y: number, pressure: number): void {
         if (!this.isDrawing) {
@@ -490,7 +456,7 @@ export class GeminiInkRenderer {
         if (!this.isDrawing) return;
         this.isDrawing = false;
         this.blockRedraw = false; // Allow redraw again
-        this.stopWetLoop();
+        // this.stopWetLoop(); // Wet ink disabled
         this.soundEngine.endStroke();
         this.strokes.push({ points: [...this.points], config: { ...this.config } });
         this.points = [];
@@ -505,28 +471,9 @@ export class GeminiInkRenderer {
         }
     }
 
-    private renderIncrementalTip() {
-        if (this.points.length < 4) return;
-        this.ctx.save();
-        // CORRECT Order: Scale THEN Translate
-        this.ctx.scale(this.camera.zoom, this.camera.zoom);
-        this.ctx.translate(this.camera.x, this.camera.y);
-
-        const len = this.points.length;
-        const p0 = this.points[len - 4];
-        const p1 = this.points[len - 3];
-        const p2 = this.points[len - 2];
-        const p3 = this.points[len - 1];
-
-        const bezier = this.catmullRomToBezier(p0, p1, p2, p3);
-        const w1 = this.calculateStrokeWidth(p1, p0);
-        const w2 = this.calculateStrokeWidth(p2, p1);
-
-        this.ctx.strokeStyle = this.config.color;
-        this.ctx.globalAlpha = this.config.opacity;
-        this.renderBezierSegment(bezier, w1, w2);
-        this.ctx.restore();
-    }
+    // --- Incremental Tip Rendering - DISABLED FOR NOW ---
+    // Kept for future optimization
+    // private renderIncrementalTip() { ... }
 
     // --- Helper Math ---
 

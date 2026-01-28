@@ -12,6 +12,7 @@ function App() {
   const [smoothing, setSmoothing] = useState(0.5); // Default smoothing
   const [strokeColor, setStrokeColor] = useState('#333333');
   const [hapticEnabled, setHapticEnabled] = useState(false); // Default OFF
+  const [frictionLevel, setFrictionLevel] = useState(0.5); // Paper friction (0-1)
   const [isEmbedMode, setIsEmbedMode] = useState(false);
 
   useEffect(() => {
@@ -66,6 +67,7 @@ function App() {
         strokeColor={strokeColor}
         smoothing={smoothing}
         hapticEnabled={hapticEnabled}
+        frictionLevel={frictionLevel}
       />
 
       {/* Network Info - Hidden in Embed Mode */}
@@ -148,6 +150,18 @@ function App() {
                 type="range" min="0" max="90" step="1"
                 value={smoothing * 100}
                 onChange={(e) => setSmoothing(parseInt(e.target.value) / 100)}
+              />
+            </div>
+
+            <div className="dock-divider" />
+
+            {/* Friction - Paper Feel */}
+            <div className="slider-group">
+              <div className="slider-label"><span>Paper</span> <span>{Math.round(frictionLevel * 100)}%</span></div>
+              <input
+                type="range" min="0" max="100" step="5"
+                value={frictionLevel * 100}
+                onChange={(e) => setFrictionLevel(parseInt(e.target.value) / 100)}
               />
             </div>
 
