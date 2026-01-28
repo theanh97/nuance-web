@@ -66,6 +66,11 @@ export class GeminiInkRenderer {
     // Block redraw during active stroke to prevent visual glitches
     private blockRedraw: boolean = false;
 
+    // MOTION PREDICTION v1.7.5: Reduce perceived latency
+    private velocityHistory: { vx: number; vy: number; timestamp: number }[] = [];
+    private predictionEnabled: boolean = true;
+    private predictionLookahead: number = 25; // ms to predict ahead
+
     constructor(canvas: HTMLCanvasElement, config: Partial<RenderConfig> = {}) {
         this.canvas = canvas;
         this.config = { ...DEFAULT_CONFIG, ...config };
@@ -196,6 +201,15 @@ export class GeminiInkRenderer {
                 baseResistance: level * 0.8
             });
         }
+    }
+
+    // MOTION PREDICTION v1.7.5: Configure prediction
+    public setPredictionEnabled(enabled: boolean) {
+        this.predictionEnabled = enabled;
+    }
+
+    public setPredictionLookahead(ms: number) {
+        this.predictionLookahead = Math.max(0, Math.min(50, ms)); // Clamp 0-50ms
     }
 
     // --- UNDO / REDO ---
@@ -358,6 +372,9 @@ export class GeminiInkRenderer {
         // Reset friction engine for new stroke
         this.frictionEngine.reset();
 
+        // MOTION PREDICTION v1.7.5: Reset velocity history for new stroke
+        this.velocityHistory = [];
+
         // Pre-init audio (resume AudioContext on user gesture)
         this.soundEngine.preInit().then(() => {
             this.soundEngine.startStroke();
@@ -409,28 +426,60 @@ export class GeminiInkRenderer {
         if (!lastPoint) {
             console.log('[Renderer] addPoint - no last point, starting fresh');
             this.points.push({ x: worldPoint.x, y: worldPoint.y, pressure, timestamp: now });
+            this.velocityHistory = []; // Reset velocity history
             return;
         }
 
-        // Calculate velocity and direction for friction
+        // Calculate velocity and direction
         const dx = worldPoint.x - lastPoint.x;
         const dy = worldPoint.y - lastPoint.y;
         const dist = Math.sqrt(dx * dx + dy * dy);
         const dt = Math.max(1, now - lastPoint.timestamp);
+        const vx = dx / dt * 1000; // pixels per second
+        const vy = dy / dt * 1000;
         const velocity = dist / dt * 10; // Scale for reasonable range
         const direction = Math.atan2(dy, dx);
 
-        // Apply friction simulation - creates "dragging through paper" feel
+        // MOTION PREDICTION v1.7.5: Track velocity history
+        this.velocityHistory.push({ vx, vy, timestamp: now });
+        // Keep only last 5 samples for smoothing
+        if (this.velocityHistory.length > 5) {
+            this.velocityHistory.shift();
+        }
+
+        // Calculate predicted position
+        let predictedX = worldPoint.x;
+        let predictedY = worldPoint.y;
+
+        if (this.predictionEnabled && this.velocityHistory.length >= 2) {
+            // Average velocity from recent history
+            const avgVx = this.velocityHistory.reduce((s, v) => s + v.vx, 0) / this.velocityHistory.length;
+            const avgVy = this.velocityHistory.reduce((s, v) => s + v.vy, 0) / this.velocityHistory.length;
+
+            // Predict ahead by lookahead time
+            const lookaheadSec = this.predictionLookahead / 1000;
+            predictedX = worldPoint.x + avgVx * lookaheadSec;
+            predictedY = worldPoint.y + avgVy * lookaheadSec;
+
+            // Blend between predicted and actual based on velocity consistency
+            // High variance = less confidence in prediction
+            const speed = Math.sqrt(avgVx * avgVx + avgVy * avgVy);
+            const confidence = Math.min(1, speed / 500); // Full confidence at 500px/s
+            predictedX = worldPoint.x + (predictedX - worldPoint.x) * confidence;
+            predictedY = worldPoint.y + (predictedY - worldPoint.y) * confidence;
+        }
+
+        // Apply friction simulation (use predicted position for smoother feel)
         const frictionResult = this.frictionEngine.processPoint({
-            x: worldPoint.x,
-            y: worldPoint.y,
+            x: predictedX,
+            y: predictedY,
             pressure,
             velocity,
             direction
         });
 
-        // Apply streamline smoothing on top of friction
-        const k = 1 - this.config.streamline;
+        // Apply streamline smoothing on top of friction (REDUCED for less lag)
+        const k = 1 - (this.config.streamline * 0.5); // Halve streamline effect for responsiveness
         const smoothedPoint: Point = {
             x: lastPoint.x + (frictionResult.adjustedX - lastPoint.x) * k,
             y: lastPoint.y + (frictionResult.adjustedY - lastPoint.y) * k,
