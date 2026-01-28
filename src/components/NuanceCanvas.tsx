@@ -89,15 +89,31 @@ export const NuanceCanvas = forwardRef<NuanceCanvasHandle, NuanceCanvasProps>(({
     // --- GESTURE & INPUT HANDLING ---
     const activePointers = useRef<Map<number, { x: number, y: number }>>(new Map());
     const prevDist = useRef<number | null>(null);
+    const activeDrawingPointer = useRef<number | null>(null);
+
+    // Helper: Get canvas-relative coordinates (works on all devices)
+    const getCanvasCoords = (e: React.PointerEvent) => {
+        const canvas = canvasRef.current;
+        if (!canvas) return { x: 0, y: 0 };
+        const rect = canvas.getBoundingClientRect();
+        return {
+            x: e.clientX - rect.left,
+            y: e.clientY - rect.top
+        };
+    };
 
     const handlePointerDown = (e: React.PointerEvent) => {
+        // Prevent default to avoid browser gesture interference on iPad
+        e.preventDefault();
+
         // 1. PEN/MOUSE: Always Draw
         if (e.pointerType === 'pen' || e.pointerType === 'mouse') {
+            // Capture this pointer for reliable tracking
             e.currentTarget.setPointerCapture(e.pointerId);
-            // FIX: Use nativeEvent.offsetX/Y for accurate canvas-relative coordinates
-            const offsetX = e.nativeEvent.offsetX;
-            const offsetY = e.nativeEvent.offsetY;
-            rendererRef.current?.startStroke(offsetX, offsetY, e.pressure || 0.5);
+            activeDrawingPointer.current = e.pointerId;
+
+            const { x, y } = getCanvasCoords(e);
+            rendererRef.current?.startStroke(x, y, e.pressure || 0.5);
             return;
         }
 
@@ -114,12 +130,25 @@ export const NuanceCanvas = forwardRef<NuanceCanvasHandle, NuanceCanvasProps>(({
     };
 
     const handlePointerMove = (e: React.PointerEvent) => {
-        // PEN/MOUSE: Draw
-        if (e.pointerType === 'pen' || (e.pointerType === 'mouse' && e.buttons === 1)) {
-            // FIX: Use nativeEvent.offsetX/Y for accurate canvas-relative coordinates
-            const offsetX = e.nativeEvent.offsetX;
-            const offsetY = e.nativeEvent.offsetY;
-            rendererRef.current?.addPoint(offsetX, offsetY, e.pressure || 0.5);
+        // PEN/MOUSE: Draw - must match the active drawing pointer
+        if ((e.pointerType === 'pen' || e.pointerType === 'mouse') &&
+            activeDrawingPointer.current === e.pointerId) {
+            e.preventDefault();
+
+            // Use coalesced events for smoother iPad/pen input
+            const nativeEvent = e.nativeEvent as PointerEvent;
+            const coalescedEvents = nativeEvent.getCoalescedEvents?.() || [nativeEvent];
+
+            const canvas = canvasRef.current;
+            if (!canvas) return;
+            const rect = canvas.getBoundingClientRect();
+
+            // Process all coalesced events for smoother strokes
+            for (const pe of coalescedEvents) {
+                const x = pe.clientX - rect.left;
+                const y = pe.clientY - rect.top;
+                rendererRef.current?.addPoint(x, y, pe.pressure || 0.5);
+            }
             return;
         }
 
@@ -127,10 +156,6 @@ export const NuanceCanvas = forwardRef<NuanceCanvasHandle, NuanceCanvasProps>(({
         if (e.pointerType === 'touch') {
             const p = activePointers.current.get(e.pointerId);
             if (!p) return;
-
-            // Pan (1 finger or more)
-            // If Palm Rejection is ON for drawing, it shouldn't block Panning.
-            // The user wants "1 Finger Pan".
 
             // Calculate delta
             const dx = e.clientX - p.x;
@@ -147,42 +172,53 @@ export const NuanceCanvas = forwardRef<NuanceCanvasHandle, NuanceCanvasProps>(({
                 const points = Array.from(activePointers.current.values());
                 const curDist = Math.hypot(points[0].x - points[1].x, points[0].y - points[1].y);
 
-                // FIX: Convert Client coordinates to Canvas-relative coordinates
+                // Convert Client coordinates to Canvas-relative coordinates
                 const rect = e.currentTarget.getBoundingClientRect();
                 const cx = ((points[0].x + points[1].x) / 2) - rect.left;
                 const cy = ((points[0].y + points[1].y) / 2) - rect.top;
 
                 if (prevDist.current) {
                     const scale = curDist / prevDist.current;
-                    // Dampen
                     const safeScale = 1 + (scale - 1) * 0.8;
                     rendererRef.current?.zoom(safeScale, cx, cy);
                 }
                 prevDist.current = curDist;
-
-                // Removed assist pan - it was causing double-pan drift
-                // Pivot zoom logic handles position correctly on its own
             }
         }
     };
 
     const handlePointerUp = (e: React.PointerEvent) => {
         if (e.pointerType === 'pen' || e.pointerType === 'mouse') {
-            rendererRef.current?.endStroke();
+            if (activeDrawingPointer.current === e.pointerId) {
+                console.log('[Canvas] Pen up:', e.pointerId);
+                activeDrawingPointer.current = null;
+                rendererRef.current?.endStroke();
+            }
         } else {
             activePointers.current.delete(e.pointerId);
             if (activePointers.current.size < 2) prevDist.current = null;
         }
     };
 
+    // Handle lost pointer capture (important for iPad)
+    const handleLostPointerCapture = (e: React.PointerEvent) => {
+        if (activeDrawingPointer.current === e.pointerId) {
+            console.log('[Canvas] Lost pointer capture:', e.pointerId);
+            activeDrawingPointer.current = null;
+            rendererRef.current?.endStroke();
+        }
+    };
+
     const handleWheel = (e: React.WheelEvent) => {
         if (e.ctrlKey) {
             e.preventDefault();
-            // FIX: Use nativeEvent.offsetX/Y for accurate canvas-relative coordinates
-            const offsetX = e.nativeEvent.offsetX;
-            const offsetY = e.nativeEvent.offsetY;
+            const canvas = canvasRef.current;
+            if (!canvas) return;
+            const rect = canvas.getBoundingClientRect();
+            const x = e.clientX - rect.left;
+            const y = e.clientY - rect.top;
             const scale = 1 - e.deltaY * 0.002;
-            rendererRef.current?.zoom(scale, offsetX, offsetY);
+            rendererRef.current?.zoom(scale, x, y);
         } else {
             rendererRef.current?.pan(-e.deltaX, -e.deltaY);
         }
@@ -226,9 +262,10 @@ export const NuanceCanvas = forwardRef<NuanceCanvasHandle, NuanceCanvasProps>(({
                 onPointerDown={handlePointerDown}
                 onPointerMove={handlePointerMove}
                 onPointerUp={handlePointerUp}
-                onPointerLeave={handlePointerUp} // Treat leave as up
+                onPointerLeave={handlePointerUp}
                 onPointerCancel={handlePointerUp}
-                onContextMenu={(e) => e.preventDefault()} // Block Right Click / Long Press Menu
+                onLostPointerCapture={handleLostPointerCapture}
+                onContextMenu={(e) => e.preventDefault()}
                 onWheel={handleWheel}
             />
         </div>

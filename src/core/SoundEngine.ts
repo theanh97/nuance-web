@@ -26,8 +26,24 @@ export class SoundEngine {
             // @ts-ignore
             const AudioContextClass = window.AudioContext || window.webkitAudioContext;
             this.audioContext = new AudioContextClass();
+            console.log('[SoundEngine] AudioContext created, state:', this.audioContext?.state);
         } catch (e) {
-            console.warn("AudioContext not supported");
+            console.warn("[SoundEngine] AudioContext not supported:", e);
+        }
+    }
+
+    /**
+     * Pre-initialize on user interaction (call early to ensure audio works)
+     */
+    public async preInit(): Promise<void> {
+        if (!this.audioContext) return;
+        if (this.audioContext.state === 'suspended') {
+            try {
+                await this.audioContext.resume();
+                console.log('[SoundEngine] AudioContext resumed in preInit');
+            } catch (e) {
+                console.warn('[SoundEngine] Failed to resume AudioContext:', e);
+            }
         }
     }
 

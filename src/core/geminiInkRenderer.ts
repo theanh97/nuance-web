@@ -268,11 +268,39 @@ export class GeminiInkRenderer {
     }
 
     startStroke(x: number, y: number, pressure: number): void {
+        console.log('[Renderer] startStroke at', x, y, 'pressure:', pressure);
         this.isDrawing = true;
-        this.soundEngine.startStroke();
+
+        // Pre-init audio (resume AudioContext on user gesture)
+        this.soundEngine.preInit().then(() => {
+            this.soundEngine.startStroke();
+        });
+
+        // Trigger immediate haptic on first touch
+        this.hapticEngine.triggerImmediate();
+
         const worldPoint = this.screenToWorld(x, y);
         this.points = [{ x: worldPoint.x, y: worldPoint.y, pressure, timestamp: performance.now() }];
-        // this.startWetLoop(); // Disabled for performance/stability check
+
+        // Draw initial point immediately
+        this.renderInitialPoint(worldPoint.x, worldPoint.y, pressure);
+    }
+
+    // Draw the first point of stroke immediately for responsiveness
+    private renderInitialPoint(worldX: number, worldY: number, pressure: number): void {
+        const width = this.config.baseStrokeWidth * (pressure * this.config.pressureInfluence + (1 - this.config.pressureInfluence) * 0.5);
+
+        this.ctx.save();
+        this.ctx.scale(this.camera.zoom, this.camera.zoom);
+        this.ctx.translate(this.camera.x, this.camera.y);
+
+        this.ctx.fillStyle = this.config.color;
+        this.ctx.globalAlpha = this.config.opacity;
+        this.ctx.beginPath();
+        this.ctx.arc(worldX, worldY, width / 2, 0, Math.PI * 2);
+        this.ctx.fill();
+
+        this.ctx.restore();
     }
 
     // --- Wet Ink Simulation (Bleed) ---
@@ -317,11 +345,21 @@ export class GeminiInkRenderer {
     }
 
     addPoint(x: number, y: number, pressure: number): void {
-        if (!this.isDrawing) return;
+        if (!this.isDrawing) {
+            console.log('[Renderer] addPoint ignored - not drawing');
+            return;
+        }
+
         const worldPoint = this.screenToWorld(x, y);
         const rawPoint = { x: worldPoint.x, y: worldPoint.y, pressure, timestamp: performance.now() };
 
         const lastPoint = this.points[this.points.length - 1];
+        if (!lastPoint) {
+            console.log('[Renderer] addPoint - no last point, starting fresh');
+            this.points.push(rawPoint);
+            return;
+        }
+
         const k = 1 - this.config.streamline;
         const smoothedPoint: Point = {
             x: lastPoint.x + (rawPoint.x - lastPoint.x) * k,
@@ -335,12 +373,45 @@ export class GeminiInkRenderer {
         const dx = smoothedPoint.x - lastPoint.x;
         const dy = smoothedPoint.y - lastPoint.y;
         const dist = Math.sqrt(dx * dx + dy * dy);
+
+        // Sound and haptic feedback
         this.soundEngine.updateStroke(dist, pressure);
-        this.hapticEngine.triggerGrain(); // Trigger vibration
+        if (dist > 2) { // Only vibrate if moved enough
+            this.hapticEngine.triggerGrain();
+        }
         this.updateSpatialAudio(smoothedPoint.x);
 
-        // FIX: Use full redraw instead of incremental to avoid coordinate issues
-        this.requestRedraw();
+        // Direct incremental rendering - no RAF delay for responsiveness
+        this.renderIncrementalStroke();
+    }
+
+    // Optimized incremental rendering - draws only the newest segment
+    private renderIncrementalStroke() {
+        const len = this.points.length;
+        if (len < 2) return;
+
+        this.ctx.save();
+        // Apply camera transform
+        this.ctx.scale(this.camera.zoom, this.camera.zoom);
+        this.ctx.translate(this.camera.x, this.camera.y);
+
+        this.ctx.strokeStyle = this.config.color;
+        this.ctx.globalAlpha = this.config.opacity;
+        this.ctx.lineCap = 'round';
+        this.ctx.lineJoin = 'round';
+
+        // Draw simple line segment for immediate feedback
+        const p1 = this.points[len - 2];
+        const p2 = this.points[len - 1];
+        const width = this.calculateStrokeWidth(p2, p1);
+
+        this.ctx.beginPath();
+        this.ctx.lineWidth = width;
+        this.ctx.moveTo(p1.x, p1.y);
+        this.ctx.lineTo(p2.x, p2.y);
+        this.ctx.stroke();
+
+        this.ctx.restore();
     }
 
     endStroke(): void {
