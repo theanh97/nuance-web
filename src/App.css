@@ -1,0 +1,278 @@
+#root {
+  width: 100vw;
+  height: 100vh;
+  margin: 0;
+  padding: 0;
+  /* iOS Prevention */
+  -webkit-touch-callout: none;
+  /* Disable long-press callout */
+  -webkit-user-select: none;
+  /* Disable text selection */
+  user-select: none;
+  touch-action: none;
+  /* Disable browser zooming/scrolling globally for the app */
+  background-color: #f5f5f7;
+  /* Apple-like light gray */
+  overflow: hidden;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* --- GLASS DOCK CONTAINER --- */
+.nuance-dock {
+  position: fixed;
+  bottom: 24px;
+  left: 50%;
+  transform: translateX(-50%);
+
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+
+  width: auto;
+  max-width: 95vw;
+  z-index: 1000;
+  pointer-events: none;
+  /* Let clicks pass through gaps */
+}
+
+/* Rows inside the dock */
+.dock-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+
+  background: rgba(255, 255, 255, 0.75);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  border: 1px solid rgba(255, 255, 255, 0.5);
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.1);
+
+  padding: 8px 12px;
+  border-radius: 20px;
+  pointer-events: auto;
+  /* Re-enable clicks */
+
+  transition: all 0.3s ease;
+}
+
+/* Responsive Handling */
+@media (max-width: 768px) {
+
+  /* Portrait/Phone: Stack rows vertically */
+  .nuance-dock {
+    width: 90vw;
+    bottom: 16px;
+  }
+
+  .dock-row {
+    overflow-x: auto;
+    justify-content: flex-start;
+    /* Allow scrolling from start */
+    padding: 8px 12px;
+
+    /* Hide scrollbar */
+    scrollbar-width: none;
+    -ms-overflow-style: none;
+  }
+
+  .dock-row::-webkit-scrollbar {
+    display: none;
+  }
+}
+
+@media (min-width: 769px) {
+
+  /* Landscape/Desktop: Maybe unify into one big row if possible, or keep 2 neat rows */
+  .nuance-dock {
+    flex-direction: row;
+    /* Side by side on very wide screens? Or just stacked is fine */
+    align-items: flex-end;
+  }
+}
+
+/* --- COMPONENTS --- */
+
+/* Dividers */
+.dock-divider {
+  width: 1px;
+  height: 24px;
+  background: rgba(0, 0, 0, 0.1);
+  flex-shrink: 0;
+}
+
+/* Action Buttons (Share, Toggle) */
+.dock-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 36px;
+  padding: 0 16px;
+  border-radius: 12px;
+  border: none;
+  font-weight: 600;
+  font-size: 13px;
+  cursor: pointer;
+  transition: transform 0.1s, background 0.2s;
+  flex-shrink: 0;
+}
+
+.dock-btn:active {
+  transform: scale(0.95);
+}
+
+.btn-primary {
+  background: #007AFF;
+  color: white;
+}
+
+.btn-icon {
+  width: 36px;
+  padding: 0;
+  background: rgba(0, 0, 0, 0.05);
+  color: #333;
+}
+
+.btn-icon.active {
+  background: #333;
+  color: white;
+}
+
+/* Color Circles */
+.color-swatch {
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  cursor: pointer;
+  border: 2px solid transparent;
+  transition: transform 0.2s;
+  flex-shrink: 0;
+  position: relative;
+}
+
+.color-swatch.active {
+  transform: scale(1.1);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
+}
+
+.color-swatch::after {
+  content: '';
+  position: absolute;
+  top: -4px;
+  left: -4px;
+  right: -4px;
+  bottom: -4px;
+  border-radius: 50%;
+  border: 2px solid transparent;
+}
+
+.color-swatch.active::after {
+  border-color: rgba(0, 0, 0, 0.1);
+  /* External ring for logic */
+}
+
+/* Size Circles */
+.size-dot {
+  border-radius: 50%;
+  background: currentColor;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid rgba(0, 0, 0, 0.1);
+  cursor: pointer;
+  transition: all 0.2s;
+  flex-shrink: 0;
+}
+
+.size-dot.active {
+  border-color: #000;
+  background: #333;
+  color: white !important;
+  transform: scale(1.1);
+}
+
+/* Profile Chips */
+.profile-chip {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 6px 10px;
+  border-radius: 10px;
+  background: transparent;
+  border: 1px solid transparent;
+  cursor: pointer;
+  transition: all 0.2s;
+  flex-shrink: 0;
+  min-width: 60px;
+}
+
+.profile-chip:hover {
+  background: rgba(0, 0, 0, 0.03);
+}
+
+.profile-chip.active {
+  background: white;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
+  border-color: rgba(0, 0, 0, 0.05);
+}
+
+.profile-icon {
+  font-size: 20px;
+  line-height: 1;
+  margin-bottom: 2px;
+}
+
+.profile-label {
+  font-size: 10px;
+  font-weight: 500;
+  color: #666;
+}
+
+/* Sliders */
+.slider-group {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 80px;
+  margin: 0 4px;
+}
+
+.slider-label {
+  font-size: 10px;
+  color: #888;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  display: flex;
+  justify-content: space-between;
+}
+
+input[type=range] {
+  -webkit-appearance: none;
+  width: 100%;
+  height: 4px;
+  background: rgba(0, 0, 0, 0.1);
+  border-radius: 2px;
+  outline: none;
+}
+
+input[type=range]::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  width: 16px;
+  height: 16px;
+  background: white;
+  border: 1px solid rgba(0, 0, 0, 0.2);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2);
+  border-radius: 50%;
+  cursor: pointer;
+  margin-top: -6px;
+  /* center thumb */
+}
+
+input[type=range]::-webkit-slider-runnable-track {
+  width: 100%;
+  height: 4px;
+  cursor: pointer;
+  background: transparent;
+  border-radius: 2px;
+}
