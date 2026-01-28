@@ -4,6 +4,11 @@ import { type SoundProfile } from '../core/SoundEngine';
 
 export interface NuanceCanvasHandle {
     exportImage: () => Promise<string>;
+    undo: () => boolean;
+    redo: () => boolean;
+    canUndo: () => boolean;
+    canRedo: () => boolean;
+    clearAll: () => void;
 }
 
 interface NuanceCanvasProps {
@@ -27,6 +32,35 @@ export const NuanceCanvas = forwardRef<NuanceCanvasHandle, NuanceCanvasProps>(({
                 return await rendererRef.current.exportImage();
             }
             return '';
+        },
+        undo: () => {
+            if (rendererRef.current) {
+                return rendererRef.current.undo();
+            }
+            return false;
+        },
+        redo: () => {
+            if (rendererRef.current) {
+                return rendererRef.current.redo();
+            }
+            return false;
+        },
+        canUndo: () => {
+            if (rendererRef.current) {
+                return rendererRef.current.canUndo();
+            }
+            return false;
+        },
+        canRedo: () => {
+            if (rendererRef.current) {
+                return rendererRef.current.canRedo();
+            }
+            return false;
+        },
+        clearAll: () => {
+            if (rendererRef.current) {
+                rendererRef.current.clearAll();
+            }
         }
     }));
     const containerRef = useRef<HTMLDivElement>(null);

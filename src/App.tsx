@@ -132,9 +132,34 @@ function App() {
           {/* Toolbar Content - Collapsible */}
           {toolbarExpanded && (
             <>
-              {/* Row 1: Main Tools (Colors, Sizes, Share) */}
+              {/* Row 1: Main Tools (Undo/Redo, Colors, Sizes, Share) */}
               <div className="dock-row">
-                {/* Share */}
+                {/* Undo/Redo */}
+                <button
+                  className="dock-btn btn-icon"
+                  onClick={() => canvasRef.current?.undo()}
+                  title="Undo"
+                >
+                  ↩️
+                </button>
+                <button
+                  className="dock-btn btn-icon"
+                  onClick={() => canvasRef.current?.redo()}
+                  title="Redo"
+                >
+                  ↪️
+                </button>
+                <button
+                  className="dock-btn btn-icon"
+                  onClick={() => canvasRef.current?.clearAll()}
+                  title="Clear All"
+                >
+                  🗑️
+                </button>
+
+                <div className="dock-divider" />
+
+                {/* Export */}
                 <button className="dock-btn btn-primary" onClick={handleShare}>
                   Export
                 </button>
@@ -188,11 +213,13 @@ function App() {
                 <div className="slider-group">
                   <div className="slider-label"><span>Smooth</span> <span>{Math.round(smoothing * 100)}%</span></div>
                   <input
-                    type="range" min="0" max="90" step="5"
+                    type="range" min="0" max="90" step="1"
                     value={smoothing * 100}
                     onChange={(e) => setSmoothing(parseInt(e.target.value) / 100)}
                   />
                 </div>
+
+                <div className="dock-divider" />
 
                 {/* Friction - Paper Feel */}
                 <div className="slider-group">

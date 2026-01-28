@@ -58,6 +58,7 @@ export class GeminiInkRenderer {
     private points: Point[] = [];
     private isDrawing: boolean = false;
     private strokes: Stroke[] = [];
+    private redoStack: Stroke[] = []; // For undo/redo
 
     private camera = { x: 0, y: 0, zoom: 1 };
     private readonly dpr: number = window.devicePixelRatio || 1;
@@ -195,6 +196,43 @@ export class GeminiInkRenderer {
                 baseResistance: level * 0.8
             });
         }
+    }
+
+    // --- UNDO / REDO ---
+    public undo(): boolean {
+        if (this.strokes.length === 0) return false;
+        const stroke = this.strokes.pop();
+        if (stroke) {
+            this.redoStack.push(stroke);
+            this.requestRedraw();
+            return true;
+        }
+        return false;
+    }
+
+    public redo(): boolean {
+        if (this.redoStack.length === 0) return false;
+        const stroke = this.redoStack.pop();
+        if (stroke) {
+            this.strokes.push(stroke);
+            this.requestRedraw();
+            return true;
+        }
+        return false;
+    }
+
+    public canUndo(): boolean {
+        return this.strokes.length > 0;
+    }
+
+    public canRedo(): boolean {
+        return this.redoStack.length > 0;
+    }
+
+    public clearAll(): void {
+        this.strokes = [];
+        this.redoStack = [];
+        this.requestRedraw();
     }
 
     private requestRedraw() {
@@ -459,6 +497,7 @@ export class GeminiInkRenderer {
         // this.stopWetLoop(); // Wet ink disabled
         this.soundEngine.endStroke();
         this.strokes.push({ points: [...this.points], config: { ...this.config } });
+        this.redoStack = []; // Clear redo stack when new stroke is added
         this.points = [];
 
         // Apply pending resize if there was one during stroke
