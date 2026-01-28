@@ -89,16 +89,16 @@ export const NuanceCanvas = forwardRef<NuanceCanvasHandle, NuanceCanvasProps>(({
     // Configuration Update
     useEffect(() => {
         if (rendererRef.current) {
-            // Physics Profiles
+            // Physics Profiles - SHARP INK v1.7.4: Much finer minWidth for crisp tips
             const physics: Record<SoundProfile, any> = {
-                pencil: { minWidth: 2, maxWidth: 6, opacity: 0.8 },
-                charcoal: { minWidth: 5, maxWidth: 14, opacity: 0.7 },
-                ballpoint: { minWidth: 3, maxWidth: 6, opacity: 1.0 },
-                fountain: { minWidth: 2, maxWidth: 10, opacity: 1.0, streamline: 0.6 },
-                marker: { minWidth: 10, maxWidth: 20, opacity: 0.5 },
-                highlighter: { minWidth: 20, maxWidth: 20, opacity: 0.3, streamline: 0.2 }, // Fixed width, transparent
-                monoline: { minWidth: 6, maxWidth: 6, opacity: 1.0, streamline: 0.8, pressureInfluence: 0 }, // No pressure, smooth
-                calligraphy: { minWidth: 2, maxWidth: 18, opacity: 1.0, streamline: 0.7, pressureInfluence: 1.5 } // High contrast
+                pencil: { minWidth: 0.5, maxWidth: 6, opacity: 0.85, velocityInfluence: 0.8 },      // SHARP: Fine tip like 0.5mm pencil
+                charcoal: { minWidth: 2, maxWidth: 14, opacity: 0.7 },                              // Charcoal stays thick
+                ballpoint: { minWidth: 0.3, maxWidth: 4, opacity: 1.0, velocityInfluence: 0.9 },   // SHARP: Ultra-fine like 0.38mm pen
+                fountain: { minWidth: 0.5, maxWidth: 12, opacity: 1.0, streamline: 0.6, velocityInfluence: 0.7 }, // SHARP: Dynamic nib
+                marker: { minWidth: 6, maxWidth: 20, opacity: 0.5 },                                // Marker stays thick
+                highlighter: { minWidth: 15, maxWidth: 20, opacity: 0.3, streamline: 0.2 },        // Highlighter fixed
+                monoline: { minWidth: 4, maxWidth: 4, opacity: 1.0, streamline: 0.8, pressureInfluence: 0, velocityInfluence: 0 }, // Fixed width
+                calligraphy: { minWidth: 0.5, maxWidth: 20, opacity: 1.0, streamline: 0.7, pressureInfluence: 1.5, velocityInfluence: 0.6 } // SHARP: Dramatic contrast
             };
 
             const p = physics[soundProfile] || {};
@@ -109,10 +109,11 @@ export const NuanceCanvas = forwardRef<NuanceCanvasHandle, NuanceCanvasProps>(({
                 color: strokeColor, // User selected color
                 opacity: p.opacity || 1.0,
                 baseStrokeWidth: brushSize,
-                minWidth: (p.minWidth || 2) * scale,
+                minWidth: (p.minWidth || 0.5) * scale,  // SHARP INK: Lower default minWidth
                 maxWidth: (p.maxWidth || 12) * scale,
                 streamline: smoothing ?? (p.streamline || 0.35), // Use prop or default
-                pressureInfluence: p.pressureInfluence ?? 0.7
+                pressureInfluence: p.pressureInfluence ?? 0.8,   // SHARP INK: Higher default
+                velocityInfluence: p.velocityInfluence ?? 0.7    // SHARP INK: Pass velocity influence
             });
 
             if (rendererRef.current.setSoundProfile) rendererRef.current.setSoundProfile(soundProfile);

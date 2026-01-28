@@ -37,11 +37,11 @@ export interface RenderConfig {
 
 export const DEFAULT_CONFIG: RenderConfig = {
     baseStrokeWidth: 8,
-    minWidth: 3,
+    minWidth: 0.5,              // SHARP INK: Much finer minimum for crisp tips
     maxWidth: 16,
     smoothness: 0.65,
-    velocityInfluence: 0.5,
-    pressureInfluence: 0.7,
+    velocityInfluence: 0.7,     // SHARP INK: More velocity sensitivity (fast = thin)
+    pressureInfluence: 0.8,     // SHARP INK: More pressure dynamic range
     color: '#000000',
     opacity: 1.0,
     streamline: 0.35
@@ -591,14 +591,41 @@ export class GeminiInkRenderer {
             return;
         }
 
+        const totalPoints = strokePoints.length;
+        const taperLength = Math.min(8, Math.floor(totalPoints * 0.15)); // Taper first/last 15% or 8 points
+
         for (let i = 0; i < strokePoints.length - 3; i++) {
             const p0 = strokePoints[i];
             const p1 = strokePoints[i + 1];
             const p2 = strokePoints[i + 2];
             const p3 = strokePoints[i + 3];
             const bezier = this.catmullRomToBezier(p0, p1, p2, p3);
-            const w1 = this.calculateStrokeWidth(p1, p0, config);
-            const w2 = this.calculateStrokeWidth(p2, p1, config);
+
+            // Calculate base widths
+            let w1 = this.calculateStrokeWidth(p1, p0, config);
+            let w2 = this.calculateStrokeWidth(p2, p1, config);
+
+            // SHARP INK: Apply taper at stroke start
+            if (i < taperLength) {
+                const taperFactor = (i + 1) / (taperLength + 1); // 0.1 to ~1.0
+                const taperCurve = taperFactor * taperFactor; // Quadratic ease-in for sharp entry
+                w1 *= taperCurve;
+                w2 *= Math.min(1, (i + 2) / (taperLength + 1)) ** 2;
+            }
+
+            // SHARP INK: Apply taper at stroke end
+            const distFromEnd = totalPoints - 3 - i;
+            if (distFromEnd < taperLength) {
+                const taperFactor = (distFromEnd + 1) / (taperLength + 1);
+                const taperCurve = taperFactor * taperFactor; // Quadratic ease-out for sharp exit
+                w1 *= Math.min(1, (distFromEnd + 2) / (taperLength + 1)) ** 2;
+                w2 *= taperCurve;
+            }
+
+            // Ensure minimum width for visibility
+            w1 = Math.max(config.minWidth, w1);
+            w2 = Math.max(config.minWidth, w2);
+
             this.renderBezierSegment(bezier, w1, w2, ctx);
         }
     }
