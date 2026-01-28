@@ -57,21 +57,138 @@
 }
 
 /* Responsive Handling */
-@media (max-width: 768px) {
 
-  /* Portrait/Phone: Stack rows vertically */
+/* Landscape mode - Very limited height (Z Fold, phones rotated) */
+@media (max-height: 450px) {
   .nuance-dock {
-    width: 90vw;
-    bottom: 16px;
+    bottom: 6px;
+    gap: 6px;
+    flex-direction: row;
+    flex-wrap: wrap;
+    justify-content: center;
+    max-width: 98vw;
+  }
+
+  .dock-row {
+    padding: 5px 8px;
+    gap: 6px;
+    border-radius: 14px;
+    overflow-x: auto;
+    max-width: 49vw;
+    scrollbar-width: none;
+    -ms-overflow-style: none;
+  }
+
+  .dock-row::-webkit-scrollbar {
+    display: none;
+  }
+
+  .dock-divider {
+    height: 18px;
+  }
+
+  .dock-btn {
+    height: 28px;
+    padding: 0 10px;
+    font-size: 11px;
+    border-radius: 10px;
+  }
+
+  .btn-icon {
+    width: 28px;
+  }
+
+  .color-swatch {
+    width: 22px;
+    height: 22px;
+  }
+
+  .size-dot {
+    transform: scale(0.8);
+  }
+
+  .slider-group {
+    min-width: 55px;
+    margin: 0 2px;
+  }
+
+  .slider-label {
+    font-size: 8px;
+  }
+
+  input[type=range] {
+    height: 3px;
+  }
+
+  input[type=range]::-webkit-slider-thumb {
+    width: 12px;
+    height: 12px;
+    margin-top: -4px;
+  }
+
+  .profile-chip {
+    min-width: 40px;
+    padding: 3px 5px;
+  }
+
+  .profile-icon {
+    font-size: 14px;
+  }
+
+  .profile-label {
+    font-size: 7px;
+  }
+}
+
+/* Small screens / Portrait phones */
+@media (max-width: 600px) and (min-height: 451px) {
+  .nuance-dock {
+    width: 95vw;
+    bottom: 12px;
+    gap: 8px;
   }
 
   .dock-row {
     overflow-x: auto;
     justify-content: flex-start;
-    /* Allow scrolling from start */
-    padding: 8px 12px;
+    padding: 6px 10px;
+    gap: 8px;
+    scrollbar-width: none;
+    -ms-overflow-style: none;
+  }
 
-    /* Hide scrollbar */
+  .dock-row::-webkit-scrollbar {
+    display: none;
+  }
+
+  .slider-group {
+    min-width: 65px;
+  }
+
+  .profile-chip {
+    min-width: 48px;
+    padding: 4px 6px;
+  }
+
+  .profile-icon {
+    font-size: 16px;
+  }
+
+  .profile-label {
+    font-size: 8px;
+  }
+}
+
+/* Medium screens */
+@media (min-width: 601px) and (max-width: 1024px) and (min-height: 451px) {
+  .nuance-dock {
+    width: auto;
+    max-width: 95vw;
+    bottom: 20px;
+  }
+
+  .dock-row {
+    overflow-x: auto;
     scrollbar-width: none;
     -ms-overflow-style: none;
   }
@@ -81,13 +198,12 @@
   }
 }
 
-@media (min-width: 769px) {
-
-  /* Landscape/Desktop: Maybe unify into one big row if possible, or keep 2 neat rows */
+/* Large screens / Desktop */
+@media (min-width: 1025px) {
   .nuance-dock {
     flex-direction: row;
-    /* Side by side on very wide screens? Or just stacked is fine */
     align-items: flex-end;
+    gap: 16px;
   }
 }
 
