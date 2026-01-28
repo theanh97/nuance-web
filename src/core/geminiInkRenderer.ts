@@ -1,5 +1,6 @@
 import { SoundEngine } from './SoundEngine';
 import { HapticEngine } from './HapticEngine';
+import { FrictionEngine } from './FrictionEngine';
 
 export interface Point {
     x: number;
@@ -52,6 +53,7 @@ export class GeminiInkRenderer {
     private config: RenderConfig = DEFAULT_CONFIG;
     private soundEngine: SoundEngine;
     private hapticEngine: HapticEngine;
+    private frictionEngine: FrictionEngine;
 
     private points: Point[] = [];
     private isDrawing: boolean = false;
@@ -66,9 +68,9 @@ export class GeminiInkRenderer {
     constructor(canvas: HTMLCanvasElement, config: Partial<RenderConfig> = {}) {
         this.canvas = canvas;
         this.config = { ...DEFAULT_CONFIG, ...config };
-        this.config = { ...DEFAULT_CONFIG, ...config };
         this.soundEngine = new SoundEngine();
         this.hapticEngine = new HapticEngine();
+        this.frictionEngine = new FrictionEngine();
 
         const ctx = this.canvas.getContext('2d', {
             alpha: true,
@@ -176,6 +178,21 @@ export class GeminiInkRenderer {
     public setHapticEnabled(enabled: boolean) {
         if (this.hapticEngine) {
             this.hapticEngine.setEnabled(enabled);
+        }
+    }
+
+    public setFrictionEnabled(enabled: boolean) {
+        if (this.frictionEngine) {
+            this.frictionEngine.setEnabled(enabled);
+        }
+    }
+
+    public setFrictionLevel(level: number) {
+        // level: 0.0 (no friction) to 1.0 (max friction)
+        if (this.frictionEngine) {
+            this.frictionEngine.setConfig({
+                baseResistance: level * 0.3 // Scale to reasonable range
+            });
         }
     }
 
@@ -299,6 +316,9 @@ export class GeminiInkRenderer {
         this.isDrawing = true;
         this.blockRedraw = true; // Block any redraw during stroke
 
+        // Reset friction engine for new stroke
+        this.frictionEngine.reset();
+
         // Pre-init audio (resume AudioContext on user gesture)
         this.soundEngine.preInit().then(() => {
             this.soundEngine.startStroke();
@@ -379,39 +399,63 @@ export class GeminiInkRenderer {
         }
 
         const worldPoint = this.screenToWorld(x, y);
-        const rawPoint = { x: worldPoint.x, y: worldPoint.y, pressure, timestamp: performance.now() };
+        const now = performance.now();
 
         const lastPoint = this.points[this.points.length - 1];
         if (!lastPoint) {
             console.log('[Renderer] addPoint - no last point, starting fresh');
-            this.points.push(rawPoint);
+            this.points.push({ x: worldPoint.x, y: worldPoint.y, pressure, timestamp: now });
             return;
         }
 
+        // Calculate velocity and direction for friction
+        const dx = worldPoint.x - lastPoint.x;
+        const dy = worldPoint.y - lastPoint.y;
+        const dist = Math.sqrt(dx * dx + dy * dy);
+        const dt = Math.max(1, now - lastPoint.timestamp);
+        const velocity = dist / dt * 10; // Scale for reasonable range
+        const direction = Math.atan2(dy, dx);
+
+        // Apply friction simulation - creates "dragging through paper" feel
+        const frictionResult = this.frictionEngine.processPoint({
+            x: worldPoint.x,
+            y: worldPoint.y,
+            pressure,
+            velocity,
+            direction
+        });
+
+        // Apply streamline smoothing on top of friction
         const k = 1 - this.config.streamline;
         const smoothedPoint: Point = {
-            x: lastPoint.x + (rawPoint.x - lastPoint.x) * k,
-            y: lastPoint.y + (rawPoint.y - lastPoint.y) * k,
-            pressure: rawPoint.pressure,
-            timestamp: rawPoint.timestamp
+            x: lastPoint.x + (frictionResult.adjustedX - lastPoint.x) * k,
+            y: lastPoint.y + (frictionResult.adjustedY - lastPoint.y) * k,
+            pressure: pressure,
+            timestamp: now
         };
 
         this.points.push(smoothedPoint);
 
-        const dx = smoothedPoint.x - lastPoint.x;
-        const dy = smoothedPoint.y - lastPoint.y;
-        const dist = Math.sqrt(dx * dx + dy * dy);
-
-        // Sound and haptic feedback
+        // Sound feedback based on movement
         this.soundEngine.updateStroke(dist, pressure);
-        if (dist > 2) { // Only vibrate if moved enough
-            this.hapticEngine.triggerGrain();
+
+        // Haptic feedback - intensity based on friction
+        if (dist > 2) {
+            // Get dynamic haptic interval based on velocity
+            const hapticInterval = this.frictionEngine.getHapticInterval(velocity);
+            if (now - this.lastHapticTime > hapticInterval) {
+                this.hapticEngine.triggerGrain();
+                this.lastHapticTime = now;
+            }
         }
+
         this.updateSpatialAudio(smoothedPoint.x);
 
         // Direct incremental rendering - no RAF delay for responsiveness
         this.renderIncrementalStroke();
     }
+
+    private lastHapticTime: number = 0;
 
     // Optimized incremental rendering - draws only the newest segment
     private renderIncrementalStroke() {
