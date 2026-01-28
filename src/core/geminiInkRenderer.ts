@@ -60,6 +60,9 @@ export class GeminiInkRenderer {
     private camera = { x: 0, y: 0, zoom: 1 };
     private readonly dpr: number = window.devicePixelRatio || 1;
 
+    // Block redraw during active stroke to prevent visual glitches
+    private blockRedraw: boolean = false;
+
     constructor(canvas: HTMLCanvasElement, config: Partial<RenderConfig> = {}) {
         this.canvas = canvas;
         this.config = { ...DEFAULT_CONFIG, ...config };
@@ -89,7 +92,21 @@ export class GeminiInkRenderer {
         this.config = { ...this.config, ...newConfig };
     }
 
+    // Track pending resize to apply after stroke ends
+    private pendingResize: boolean = false;
+
     public resize(): void {
+        // If currently drawing, defer resize until stroke ends
+        if (this.isDrawing) {
+            console.log('[Renderer] Resize deferred - stroke in progress');
+            this.pendingResize = true;
+            return;
+        }
+
+        this.doResize();
+    }
+
+    private doResize(): void {
         const rect = this.canvas.parentElement?.getBoundingClientRect();
         if (!rect) return;
 
@@ -102,6 +119,7 @@ export class GeminiInkRenderer {
         this.ctx.lineCap = 'round';
         this.ctx.lineJoin = 'round';
 
+        this.pendingResize = false;
         this.redrawAll();
     }
 
@@ -162,6 +180,11 @@ export class GeminiInkRenderer {
     }
 
     private requestRedraw() {
+        // Block redraw during active stroke to prevent visual glitches
+        if (this.blockRedraw) {
+            console.log('[Renderer] Redraw blocked - stroke in progress');
+            return;
+        }
         requestAnimationFrame(() => this.redrawAll());
     }
 
@@ -233,12 +256,16 @@ export class GeminiInkRenderer {
     }
 
     private paperPattern: CanvasPattern | null = null;
+
     private loadPaperTexture() {
         const img = new Image();
         img.src = `data:image/svg+xml,%3Csvg viewBox='0 0 200 200' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noiseFilter'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.8' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noiseFilter)' opacity='0.08'/%3E%3C/svg%3E`;
         img.onload = () => {
             this.paperPattern = this.ctx.createPattern(img, 'repeat');
-            this.requestRedraw();
+            // Only redraw if NOT currently drawing (blockRedraw handles this too, but explicit is better)
+            if (!this.isDrawing) {
+                this.requestRedraw();
+            }
         };
     }
 
@@ -270,6 +297,7 @@ export class GeminiInkRenderer {
     startStroke(x: number, y: number, pressure: number): void {
         console.log('[Renderer] startStroke at', x, y, 'pressure:', pressure);
         this.isDrawing = true;
+        this.blockRedraw = true; // Block any redraw during stroke
 
         // Pre-init audio (resume AudioContext on user gesture)
         this.soundEngine.preInit().then(() => {
@@ -417,10 +445,20 @@ export class GeminiInkRenderer {
     endStroke(): void {
         if (!this.isDrawing) return;
         this.isDrawing = false;
+        this.blockRedraw = false; // Allow redraw again
         this.stopWetLoop();
         this.soundEngine.endStroke();
         this.strokes.push({ points: [...this.points], config: { ...this.config } });
         this.points = [];
+
+        // Apply pending resize if there was one during stroke
+        if (this.pendingResize) {
+            console.log('[Renderer] Applying deferred resize');
+            this.doResize();
+        } else {
+            // Full redraw to finalize stroke with proper bezier curves
+            this.requestRedraw();
+        }
     }
 
     private renderIncrementalTip() {

@@ -137,17 +137,24 @@ export const NuanceCanvas = forwardRef<NuanceCanvasHandle, NuanceCanvasProps>(({
 
             // Use coalesced events for smoother iPad/pen input
             const nativeEvent = e.nativeEvent as PointerEvent;
-            const coalescedEvents = nativeEvent.getCoalescedEvents?.() || [nativeEvent];
+            const coalescedEvents = nativeEvent.getCoalescedEvents?.() || [];
 
             const canvas = canvasRef.current;
             if (!canvas) return;
             const rect = canvas.getBoundingClientRect();
 
-            // Process all coalesced events for smoother strokes
-            for (const pe of coalescedEvents) {
-                const x = pe.clientX - rect.left;
-                const y = pe.clientY - rect.top;
-                rendererRef.current?.addPoint(x, y, pe.pressure || 0.5);
+            // Process coalesced events if available, otherwise use main event
+            if (coalescedEvents.length > 0) {
+                for (const pe of coalescedEvents) {
+                    const x = pe.clientX - rect.left;
+                    const y = pe.clientY - rect.top;
+                    rendererRef.current?.addPoint(x, y, pe.pressure || 0.5);
+                }
+            } else {
+                // Fallback: use the main event directly
+                const x = e.clientX - rect.left;
+                const y = e.clientY - rect.top;
+                rendererRef.current?.addPoint(x, y, e.pressure || 0.5);
             }
             return;
         }

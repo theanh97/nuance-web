@@ -42,7 +42,7 @@ function App() {
 
   const sizes = [2, 4, 8, 12, 16, 24];
   const colors = ['#333333', '#0055cc', '#cc3300', '#009944', '#663399', '#ffffff']; // Charcoal, Blue, Red, Green, Purple, Eraser(White)
-  const networkUrl = "http://192.168.1.86:5173";
+  const networkUrl = "http://192.168.1.107:5173";
 
   const profiles: { id: SoundProfile, label: string, icon: string }[] = [
     { id: 'pencil', label: 'Pencil', icon: '✏️' },

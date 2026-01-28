@@ -48,7 +48,9 @@ export class SoundEngine {
     }
 
     public setVolume(volume: number) {
-        this.baseVolume = volume * 6.0; // Extreme boost
+        // Reduced multiplier: 50% slider now feels like old 10-15%
+        // Old: 6.0x (too loud), New: 1.2x (subtle, comfortable)
+        this.baseVolume = volume * 1.2;
         if (this.gainNode && this.audioContext) {
             this.gainNode.gain.setTargetAtTime(this.baseVolume, this.audioContext.currentTime, 0.05);
         }
