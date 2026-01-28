@@ -9,6 +9,7 @@ export interface NuanceCanvasHandle {
     canUndo: () => boolean;
     canRedo: () => boolean;
     clearAll: () => void;
+    setRawMode: (enabled: boolean) => void; // RAW MODE v1.7.6
 }
 
 interface NuanceCanvasProps {
@@ -60,6 +61,11 @@ export const NuanceCanvas = forwardRef<NuanceCanvasHandle, NuanceCanvasProps>(({
         clearAll: () => {
             if (rendererRef.current) {
                 rendererRef.current.clearAll();
+            }
+        },
+        setRawMode: (enabled: boolean) => {
+            if (rendererRef.current) {
+                rendererRef.current.setRawMode(enabled);
             }
         }
     }));
@@ -167,9 +173,11 @@ export const NuanceCanvas = forwardRef<NuanceCanvasHandle, NuanceCanvasProps>(({
     };
 
     const handlePointerMove = (e: React.PointerEvent) => {
-        // PEN/MOUSE: Draw - must match the active drawing pointer
+        // PEN/MOUSE: Draw
+        // IPAD FIX v1.7.5: Relaxed pointer ID check - only require active drawing state
+        // iPad may have quirky pointer ID behavior during rapid strokes
         if ((e.pointerType === 'pen' || e.pointerType === 'mouse') &&
-            activeDrawingPointer.current === e.pointerId) {
+            activeDrawingPointer.current !== null) {
             e.preventDefault();
 
             // Use coalesced events for smoother iPad/pen input
@@ -233,8 +241,10 @@ export const NuanceCanvas = forwardRef<NuanceCanvasHandle, NuanceCanvasProps>(({
 
     const handlePointerUp = (e: React.PointerEvent) => {
         if (e.pointerType === 'pen' || e.pointerType === 'mouse') {
-            if (activeDrawingPointer.current === e.pointerId) {
-                console.log('[Canvas] Pen up:', e.pointerId);
+            // IPAD FIX v1.7.5: Always end stroke if we have an active drawing
+            // Don't strictly check pointer ID - iPad may have quirky behavior
+            if (activeDrawingPointer.current !== null) {
+                console.log('[Canvas] Pen up:', e.pointerId, '(was tracking:', activeDrawingPointer.current, ')');
                 activeDrawingPointer.current = null;
                 rendererRef.current?.endStroke();
             }

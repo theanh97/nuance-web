@@ -15,6 +15,7 @@ function App() {
   const [frictionLevel, setFrictionLevel] = useState(0.5); // Paper friction (0-1)
   const [isEmbedMode, setIsEmbedMode] = useState(false);
   const [toolbarExpanded, setToolbarExpanded] = useState(true); // Collapsible toolbar
+  const [rawMode, setRawMode] = useState(false); // RAW MODE v1.7.6 - bypass all processing
 
   useEffect(() => {
     // Check for embed mode
@@ -237,6 +238,20 @@ function App() {
                   title="Haptic Feedback"
                 >
                   📳
+                </button>
+
+                {/* RAW MODE v1.7.6: Toggle for latency testing */}
+                <button
+                  className={`dock-btn btn-icon ${rawMode ? 'active' : ''}`}
+                  onClick={() => {
+                    const newMode = !rawMode;
+                    setRawMode(newMode);
+                    canvasRef.current?.setRawMode(newMode);
+                  }}
+                  title={rawMode ? "RAW MODE ON - Pure input" : "RAW MODE OFF - Full processing"}
+                  style={rawMode ? { background: '#ff3b30', color: 'white' } : {}}
+                >
+                  ⚡
                 </button>
 
                 <div className="dock-divider" />

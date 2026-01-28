@@ -71,6 +71,10 @@ export class GeminiInkRenderer {
     private predictionEnabled: boolean = true;
     private predictionLookahead: number = 25; // ms to predict ahead
 
+    // RAW MODE v1.7.6: Bypass ALL processing for latency testing
+    // When enabled: No friction, no streamline, no prediction - pure 1:1 input
+    private rawModeEnabled: boolean = false;
+
     constructor(canvas: HTMLCanvasElement, config: Partial<RenderConfig> = {}) {
         this.canvas = canvas;
         this.config = { ...DEFAULT_CONFIG, ...config };
@@ -210,6 +214,17 @@ export class GeminiInkRenderer {
 
     public setPredictionLookahead(ms: number) {
         this.predictionLookahead = Math.max(0, Math.min(50, ms)); // Clamp 0-50ms
+    }
+
+    // RAW MODE v1.7.6: Toggle raw input mode
+    // When ON: Bypass friction, streamline, prediction - pure 1:1 input for minimum latency
+    public setRawMode(enabled: boolean) {
+        this.rawModeEnabled = enabled;
+        console.log(`[Renderer] RAW MODE: ${enabled ? 'ON - Pure input, no processing' : 'OFF - Full processing'}`);
+    }
+
+    public isRawMode(): boolean {
+        return this.rawModeEnabled;
     }
 
     // --- UNDO / REDO ---
@@ -430,14 +445,44 @@ export class GeminiInkRenderer {
             return;
         }
 
-        // Calculate velocity and direction
+        // Calculate basic metrics (needed for sound/haptic even in RAW MODE)
         const dx = worldPoint.x - lastPoint.x;
         const dy = worldPoint.y - lastPoint.y;
         const dist = Math.sqrt(dx * dx + dy * dy);
         const dt = Math.max(1, now - lastPoint.timestamp);
+        const velocity = dist / dt * 10; // Scale for reasonable range
+
+        // ═══════════════════════════════════════════════════════════════════
+        // RAW MODE v1.7.6: BYPASS ALL PROCESSING - Pure 1:1 input
+        // ═══════════════════════════════════════════════════════════════════
+        if (this.rawModeEnabled) {
+            // Direct push - no friction, no streamline, no prediction
+            const rawPoint: Point = {
+                x: worldPoint.x,
+                y: worldPoint.y,
+                pressure: pressure,
+                timestamp: now
+            };
+            this.points.push(rawPoint);
+
+            // Still do sound/haptic feedback (doesn't affect latency)
+            this.soundEngine.updateStroke(dist, pressure);
+            if (dist > 2 && now - this.lastHapticTime > 30) {
+                this.hapticEngine.triggerGrain();
+                this.lastHapticTime = now;
+            }
+            this.updateSpatialAudio(rawPoint.x);
+
+            // Direct render - no RAF delay
+            this.renderIncrementalStroke();
+            return;
+        }
+
+        // ═══════════════════════════════════════════════════════════════════
+        // PROCESSED MODE: Full processing pipeline
+        // ═══════════════════════════════════════════════════════════════════
         const vx = dx / dt * 1000; // pixels per second
         const vy = dy / dt * 1000;
-        const velocity = dist / dt * 10; // Scale for reasonable range
         const direction = Math.atan2(dy, dx);
 
         // MOTION PREDICTION v1.7.5: Track velocity history
