@@ -101,12 +101,13 @@ export class FrictionEngine {
         const grainFactor = this.calculateGrainFactor(input.direction);
         friction += grainFactor * this.config.grainStrength;
 
-        // Clamp friction to reasonable range
-        friction = Math.max(0, Math.min(0.5, friction));
+        // Clamp friction to reasonable range (0 = instant, 0.85 = very laggy)
+        friction = Math.max(0, Math.min(0.85, friction));
 
         // Apply friction as interpolation toward target
         // Lower friction = faster catch-up, higher = more lag
-        const smoothFactor = 1 - friction;
+        // Square the friction for more dramatic effect at high values
+        const smoothFactor = 1 - (friction * friction);
         const adjustedX = this.lastPoint.x + (input.x - this.lastPoint.x) * smoothFactor;
         const adjustedY = this.lastPoint.y + (input.y - this.lastPoint.y) * smoothFactor;
 

@@ -17,7 +17,7 @@ interface NuanceCanvasProps {
     frictionLevel?: number; // 0.0 to 1.0 - paper friction simulation
 }
 
-export const NuanceCanvas = forwardRef<NuanceCanvasHandle, NuanceCanvasProps>(({ brushSize, penOnly: _penOnly, soundProfile, soundVolume, strokeColor, smoothing, hapticEnabled = true, frictionLevel = 0.5 }, ref) => {
+export const NuanceCanvas = forwardRef<NuanceCanvasHandle, NuanceCanvasProps>(({ brushSize, penOnly: _penOnly, soundProfile, soundVolume, strokeColor, smoothing, hapticEnabled = false, frictionLevel = 0.5 }, ref) => {
     const canvasRef = useRef<HTMLCanvasElement>(null);
     const rendererRef = useRef<GeminiInkRenderer | null>(null);
 
@@ -86,7 +86,7 @@ export const NuanceCanvas = forwardRef<NuanceCanvasHandle, NuanceCanvasProps>(({
             if (rendererRef.current.setHapticEnabled) rendererRef.current.setHapticEnabled(hapticEnabled);
             if (rendererRef.current.setFrictionLevel) rendererRef.current.setFrictionLevel(frictionLevel);
         }
-    }, [brushSize, soundProfile, soundVolume, strokeColor, hapticEnabled, frictionLevel]);
+    }, [brushSize, soundProfile, soundVolume, strokeColor, smoothing, hapticEnabled, frictionLevel]);
 
     // --- GESTURE & INPUT HANDLING ---
     const activePointers = useRef<Map<number, { x: number, y: number }>>(new Map());

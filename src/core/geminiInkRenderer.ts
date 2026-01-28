@@ -189,10 +189,10 @@ export class GeminiInkRenderer {
 
     public setFrictionLevel(level: number) {
         // level: 0.0 (no friction) to 1.0 (max friction)
-        // At 50% slider = 0.3 (noticeable), at 100% = 0.6 (very strong)
+        // At 50% slider = 0.4 (noticeable), at 100% = 0.8 (very strong lag)
         if (this.frictionEngine) {
             this.frictionEngine.setConfig({
-                baseResistance: level * 0.6
+                baseResistance: level * 0.8
             });
         }
     }

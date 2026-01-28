@@ -1,5 +1,5 @@
 export class HapticEngine {
-    private enabled: boolean = true; // Default to true
+    private enabled: boolean = false; // Default to OFF - user must enable
     private lastVibrateTime: number = 0;
     private isSupported: boolean = false;
 
