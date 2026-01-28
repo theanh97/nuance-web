@@ -9,10 +9,13 @@ function App() {
   const [penOnly] = useState(true); // Default to Pen Mode
   const [soundProfile, setSoundProfile] = useState<SoundProfile>('pencil');
   const [soundVolume, setSoundVolume] = useState(0.5);
-  const [smoothing, setSmoothing] = useState(0.5); // Default smoothing
   const [strokeColor, setStrokeColor] = useState('#333333');
   const [hapticEnabled, setHapticEnabled] = useState(false); // Default OFF
-  const [frictionLevel, setFrictionLevel] = useState(0.5); // Paper friction (0-1)
+
+  // v1.8.0: Unified Surface Feel (replaces smoothing + friction)
+  // 0 = Glass (smooth, silent, slippery)
+  // 1 = Stone (rough, scratchy, high friction)
+  const [surfaceTexture, setSurfaceTexture] = useState(0.4); // Default: Slightly smooth (paper-like)
   const [isEmbedMode, setIsEmbedMode] = useState(false);
   const [toolbarExpanded, setToolbarExpanded] = useState(true); // Collapsible toolbar
   const [rawMode, setRawMode] = useState(false); // RAW MODE v1.7.6 - bypass all processing
@@ -97,9 +100,9 @@ function App() {
         soundProfile={soundProfile}
         soundVolume={soundVolume}
         strokeColor={strokeColor}
-        smoothing={smoothing}
+        smoothing={0.7 - surfaceTexture * 0.5}  // v1.8.0: Derived from texture (Glass=smooth, Stone=raw)
         hapticEnabled={hapticEnabled}
-        frictionLevel={frictionLevel}
+        surfaceTexture={surfaceTexture}  // v1.8.0: Unified surface control
       />
 
       {/* Network Info - Hidden in Embed Mode */}
@@ -210,25 +213,24 @@ function App() {
                   />
                 </div>
 
-                {/* Smoothing */}
-                <div className="slider-group">
-                  <div className="slider-label"><span>Smooth</span> <span>{Math.round(smoothing * 100)}%</span></div>
-                  <input
-                    type="range" min="0" max="90" step="1"
-                    value={smoothing * 100}
-                    onChange={(e) => setSmoothing(parseInt(e.target.value) / 100)}
-                  />
-                </div>
-
                 <div className="dock-divider" />
 
-                {/* Friction - Paper Feel */}
-                <div className="slider-group">
-                  <div className="slider-label"><span>Paper</span> <span>{Math.round(frictionLevel * 100)}%</span></div>
+                {/* v1.8.0: Unified Surface Feel (replaces Smooth + Paper sliders) */}
+                <div className="slider-group" style={{ minWidth: '120px' }}>
+                  <div className="slider-label">
+                    <span>🧊</span>
+                    <span style={{ flex: 1, textAlign: 'center', fontSize: '9px' }}>Surface</span>
+                    <span>🪨</span>
+                  </div>
                   <input
                     type="range" min="0" max="100" step="5"
-                    value={frictionLevel * 100}
-                    onChange={(e) => setFrictionLevel(parseInt(e.target.value) / 100)}
+                    value={surfaceTexture * 100}
+                    onChange={(e) => {
+                      const newTexture = parseInt(e.target.value) / 100;
+                      setSurfaceTexture(newTexture);
+                      canvasRef.current?.setSurfaceTexture(newTexture);
+                    }}
+                    title={surfaceTexture < 0.3 ? 'Glass - Smooth & Silent' : surfaceTexture > 0.7 ? 'Stone - Rough & Scratchy' : 'Paper - Balanced'}
                   />
                 </div>
 

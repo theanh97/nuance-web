@@ -207,6 +207,34 @@ export class GeminiInkRenderer {
         }
     }
 
+    /**
+     * v1.8.0: Unified Surface Texture control
+     * 0 = Glass (smooth, silent, no friction)
+     * 1 = Stone (rough, scratchy sound, high friction)
+     *
+     * This single slider controls BOTH:
+     * - Physical feel (friction/resistance)
+     * - Sound character (smooth vs scratchy)
+     */
+    public setSurfaceTexture(texture: number) {
+        const t = Math.max(0, Math.min(1, texture));
+
+        // 1. Update friction (texture = friction feeling)
+        if (this.frictionEngine) {
+            this.frictionEngine.setConfig({
+                baseResistance: t * 0.7,      // 0-0.7 range (not too laggy)
+                grainStrength: t * 0.4        // Higher texture = more grain feel
+            });
+        }
+
+        // 2. Update sound character
+        if (this.soundEngine && this.soundEngine.setTexture) {
+            this.soundEngine.setTexture(t);
+        }
+
+        console.log(`[Renderer] Surface Texture: ${Math.round(t * 100)}% (${t < 0.3 ? '🧊 Glass' : t > 0.7 ? '🪨 Stone' : '📝 Paper'})`);
+    }
+
     // MOTION PREDICTION v1.7.5: Configure prediction
     public setPredictionEnabled(enabled: boolean) {
         this.predictionEnabled = enabled;

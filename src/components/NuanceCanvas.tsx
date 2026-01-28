@@ -10,6 +10,7 @@ export interface NuanceCanvasHandle {
     canRedo: () => boolean;
     clearAll: () => void;
     setRawMode: (enabled: boolean) => void; // RAW MODE v1.7.6
+    setSurfaceTexture: (texture: number) => void; // v1.8.0: Unified surface feel (0=Glass, 1=Stone)
 }
 
 interface NuanceCanvasProps {
@@ -20,10 +21,10 @@ interface NuanceCanvasProps {
     strokeColor: string;
     smoothing?: number; // 0.0 to 1.0
     hapticEnabled?: boolean;
-    frictionLevel?: number; // 0.0 to 1.0 - paper friction simulation
+    surfaceTexture?: number; // v1.8.0: Unified surface feel (0=Glass, 1=Stone)
 }
 
-export const NuanceCanvas = forwardRef<NuanceCanvasHandle, NuanceCanvasProps>(({ brushSize, penOnly: _penOnly, soundProfile, soundVolume, strokeColor, smoothing, hapticEnabled = false, frictionLevel = 0.5 }, ref) => {
+export const NuanceCanvas = forwardRef<NuanceCanvasHandle, NuanceCanvasProps>(({ brushSize, penOnly: _penOnly, soundProfile, soundVolume, strokeColor, smoothing, hapticEnabled = false, surfaceTexture = 0.4 }, ref) => {
     const canvasRef = useRef<HTMLCanvasElement>(null);
     const rendererRef = useRef<GeminiInkRenderer | null>(null);
 
@@ -67,6 +68,11 @@ export const NuanceCanvas = forwardRef<NuanceCanvasHandle, NuanceCanvasProps>(({
             if (rendererRef.current) {
                 rendererRef.current.setRawMode(enabled);
             }
+        },
+        setSurfaceTexture: (texture: number) => {
+            if (rendererRef.current) {
+                rendererRef.current.setSurfaceTexture(texture);
+            }
         }
     }));
     const containerRef = useRef<HTMLDivElement>(null);
@@ -90,6 +96,28 @@ export const NuanceCanvas = forwardRef<NuanceCanvasHandle, NuanceCanvasProps>(({
             console.error("Renderer Init Failed:", err);
             setErrorMsg(err.message || "Unknown Renderer Error");
         }
+    }, []);
+
+    // IPAD FIX v1.7.7: Prevent Scribble feature from swallowing pointer events
+    // This is a known WebKit bug (https://bugs.webkit.org/show_bug.cgi?id=217430)
+    useEffect(() => {
+        const canvas = canvasRef.current;
+        if (!canvas) return;
+
+        // Add touchmove handler that prevents default - stops Scribble interference
+        const preventScribble = (e: TouchEvent) => {
+            // Only prevent if we're actively drawing with pen
+            if (activeDrawingPointer.current !== null) {
+                e.preventDefault();
+            }
+        };
+
+        // Must use { passive: false } to allow preventDefault
+        canvas.addEventListener('touchmove', preventScribble, { passive: false });
+
+        return () => {
+            canvas.removeEventListener('touchmove', preventScribble);
+        };
     }, []);
 
     // Configuration Update
@@ -125,14 +153,21 @@ export const NuanceCanvas = forwardRef<NuanceCanvasHandle, NuanceCanvasProps>(({
             if (rendererRef.current.setSoundProfile) rendererRef.current.setSoundProfile(soundProfile);
             if (rendererRef.current.setSoundVolume) rendererRef.current.setSoundVolume(soundVolume);
             if (rendererRef.current.setHapticEnabled) rendererRef.current.setHapticEnabled(hapticEnabled);
-            if (rendererRef.current.setFrictionLevel) rendererRef.current.setFrictionLevel(frictionLevel);
+            // v1.8.0: Unified surface texture control (replaces frictionLevel)
+            if (rendererRef.current.setSurfaceTexture) rendererRef.current.setSurfaceTexture(surfaceTexture);
         }
-    }, [brushSize, soundProfile, soundVolume, strokeColor, smoothing, hapticEnabled, frictionLevel]);
+    }, [brushSize, soundProfile, soundVolume, strokeColor, smoothing, hapticEnabled, surfaceTexture]);
 
     // --- GESTURE & INPUT HANDLING ---
     const activePointers = useRef<Map<number, { x: number, y: number }>>(new Map());
     const prevDist = useRef<number | null>(null);
     const activeDrawingPointer = useRef<number | null>(null);
+
+    // IPAD FIX v1.7.7: Detect Safari/iOS - they have buggy pointer event handling
+    const isSafari = useRef<boolean>(
+        typeof navigator !== 'undefined' &&
+        /^((?!chrome|android).)*safari/i.test(navigator.userAgent)
+    );
 
     // Helper: Get canvas-relative coordinates (works on all devices)
     const getCanvasCoords = (e: React.PointerEvent) => {
@@ -186,15 +221,23 @@ export const NuanceCanvas = forwardRef<NuanceCanvasHandle, NuanceCanvasProps>(({
             activeDrawingPointer.current === e.pointerId) {
             e.preventDefault();
 
-            // Use coalesced events for smoother iPad/pen input
-            const nativeEvent = e.nativeEvent as PointerEvent;
-            const coalescedEvents = nativeEvent.getCoalescedEvents?.() || [];
-
             const canvas = canvasRef.current;
             if (!canvas) return;
             const rect = canvas.getBoundingClientRect();
 
-            // Process coalesced events if available, otherwise use main event
+            // IPAD FIX v1.7.7: Safari has buggy getCoalescedEvents - skip it entirely
+            // On Safari/iPad, just use the main event directly for reliability
+            if (isSafari.current) {
+                const x = e.clientX - rect.left;
+                const y = e.clientY - rect.top;
+                rendererRef.current?.addPoint(x, y, e.pressure || 0.5);
+                return;
+            }
+
+            // Chrome/Samsung: Use coalesced events for smoother input
+            const nativeEvent = e.nativeEvent as PointerEvent;
+            const coalescedEvents = nativeEvent.getCoalescedEvents?.() || [];
+
             if (coalescedEvents.length > 0) {
                 for (const pe of coalescedEvents) {
                     const x = pe.clientX - rect.left;
@@ -202,7 +245,6 @@ export const NuanceCanvas = forwardRef<NuanceCanvasHandle, NuanceCanvasProps>(({
                     rendererRef.current?.addPoint(x, y, pe.pressure || 0.5);
                 }
             } else {
-                // Fallback: use the main event directly
                 const x = e.clientX - rect.left;
                 const y = e.clientY - rect.top;
                 rendererRef.current?.addPoint(x, y, e.pressure || 0.5);

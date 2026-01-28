@@ -13,6 +13,11 @@ export class SoundEngine {
     private currentProfile: SoundProfile = 'pencil';
     private baseVolume: number = 0.5;
 
+    // v1.8.0: Surface texture affects sound character
+    // 0 = Glass (smooth, quiet) → 1 = Stone (rough, noisy)
+    private surfaceTexture: number = 0.5;
+    private textureFilterNode: BiquadFilterNode | null = null;
+
     public setPanning(panX: number) {
         // panX: -1 (Left) to 1 (Right)
         if (this.pannerNode && this.audioContext) {
@@ -53,6 +58,34 @@ export class SoundEngine {
         this.baseVolume = volume * 1.2;
         if (this.gainNode && this.audioContext) {
             this.gainNode.gain.setTargetAtTime(this.baseVolume, this.audioContext.currentTime, 0.05);
+        }
+    }
+
+    /**
+     * v1.8.0: Set surface texture (0 = Glass/smooth, 1 = Stone/rough)
+     * This changes the sound character in real-time:
+     * - Low texture: Smooth, muffled sound (low-pass filter)
+     * - High texture: Rough, scratchy sound (high-pass boost + noise)
+     */
+    public setTexture(texture: number) {
+        this.surfaceTexture = Math.max(0, Math.min(1, texture));
+
+        if (this.textureFilterNode && this.audioContext) {
+            // Texture affects filter frequency:
+            // Glass (0): Low-pass at 200Hz - very muffled, almost silent
+            // Stone (1): High-pass at 1500Hz - scratchy, gritty
+            const freq = 200 + this.surfaceTexture * 1300; // 200-1500 Hz range
+            const q = 0.3 + this.surfaceTexture * 1.2; // 0.3-1.5 Q range
+
+            this.textureFilterNode.frequency.setTargetAtTime(freq, this.audioContext.currentTime, 0.1);
+            this.textureFilterNode.Q.setTargetAtTime(q, this.audioContext.currentTime, 0.1);
+
+            // At high texture, switch to high-pass for scratchy feel
+            if (this.surfaceTexture > 0.6) {
+                this.textureFilterNode.type = 'highpass';
+            } else {
+                this.textureFilterNode.type = 'lowpass';
+            }
         }
     }
 
@@ -193,9 +226,19 @@ export class SoundEngine {
             this.filterNode.Q.value = Q;
             this.filterNode.gain.value = gain;
 
-            // Chain
+            // v1.8.0: Create texture filter for surface feel
+            this.textureFilterNode = this.audioContext.createBiquadFilter();
+            // Initialize based on current texture setting
+            const texFreq = 200 + this.surfaceTexture * 1300;
+            const texQ = 0.3 + this.surfaceTexture * 1.2;
+            this.textureFilterNode.type = this.surfaceTexture > 0.6 ? 'highpass' : 'lowpass';
+            this.textureFilterNode.frequency.value = texFreq;
+            this.textureFilterNode.Q.value = texQ;
+
+            // Chain: noise → profile filter → texture filter → envelope → gain → panner
             this.noiseNode.connect(this.filterNode);
-            this.filterNode.connect(this.envelopeNode);
+            this.filterNode.connect(this.textureFilterNode);
+            this.textureFilterNode.connect(this.envelopeNode);
             this.envelopeNode.connect(this.gainNode);
 
             // Spatial Audio: Panner Node
