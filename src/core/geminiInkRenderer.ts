@@ -406,8 +406,19 @@ export class GeminiInkRenderer {
     }
 
     // Draw the first point of stroke immediately for responsiveness
+    // v1.7.7: Fixed "tap creates huge dot" bug - initial point now respects minWidth/maxWidth
     private renderInitialPoint(worldX: number, worldY: number, pressure: number): void {
-        const width = this.config.baseStrokeWidth * (pressure * this.config.pressureInfluence + (1 - this.config.pressureInfluence) * 0.5);
+        // Calculate base width from pressure
+        const pFactor = pressure * this.config.pressureInfluence + (1 - this.config.pressureInfluence) * 0.5;
+        let width = this.config.baseStrokeWidth * pFactor;
+
+        // v1.7.7: Apply taper reduction for initial point (like stroke start)
+        // This makes quick taps produce smaller dots
+        const taperFactor = 0.4; // Start at 40% of full width (like stroke taper)
+        width *= taperFactor;
+
+        // Clamp to min/max width
+        width = Math.max(this.config.minWidth, Math.min(this.config.maxWidth, width));
 
         this.ctx.save();
         this.ctx.scale(this.camera.zoom, this.camera.zoom);
@@ -669,6 +680,22 @@ export class GeminiInkRenderer {
         // Use targetCtx if provided, otherwise use this.ctx
         const ctx = targetCtx || this.ctx;
 
+        // v1.7.7: Handle single-point strokes (taps/dots)
+        if (strokePoints.length === 1) {
+            const p = strokePoints[0];
+            // Draw as small dot with taper factor applied
+            const pFactor = p.pressure * config.pressureInfluence + (1 - config.pressureInfluence) * 0.5;
+            let width = config.baseStrokeWidth * pFactor * 0.4; // Taper factor for dots
+            width = Math.max(config.minWidth, Math.min(config.maxWidth, width));
+
+            ctx.fillStyle = config.color;
+            ctx.globalAlpha = config.opacity;
+            ctx.beginPath();
+            ctx.arc(p.x, p.y, width / 2, 0, Math.PI * 2);
+            ctx.fill();
+            return;
+        }
+
         if (strokePoints.length < 2) return;
 
         ctx.strokeStyle = config.color;
@@ -677,10 +704,17 @@ export class GeminiInkRenderer {
         ctx.lineJoin = 'round';
         ctx.beginPath();
 
+        // v1.7.7: Short strokes (2-3 points) now use pressure-based width with taper
         if (strokePoints.length < 4) {
             ctx.moveTo(strokePoints[0].x, strokePoints[0].y);
+            // Calculate average pressure for width
+            const avgPressure = strokePoints.reduce((s, p) => s + p.pressure, 0) / strokePoints.length;
+            const pFactor = avgPressure * config.pressureInfluence + (1 - config.pressureInfluence) * 0.5;
+            let width = config.baseStrokeWidth * pFactor * 0.5; // Apply taper for short strokes
+            width = Math.max(config.minWidth, Math.min(config.maxWidth, width));
+
             strokePoints.forEach(p => ctx.lineTo(p.x, p.y));
-            ctx.lineWidth = config.baseStrokeWidth;
+            ctx.lineWidth = width;
             ctx.stroke();
             return;
         }

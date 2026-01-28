@@ -151,6 +151,14 @@ export const NuanceCanvas = forwardRef<NuanceCanvasHandle, NuanceCanvasProps>(({
 
         // 1. PEN/MOUSE: Always Draw
         if (e.pointerType === 'pen' || e.pointerType === 'mouse') {
+            // IPAD FIX v1.7.6: If there's an orphaned stroke (pointerup was missed),
+            // clean it up before starting new stroke
+            if (activeDrawingPointer.current !== null && activeDrawingPointer.current !== e.pointerId) {
+                console.log('[Canvas] iPad: Cleaning up orphaned stroke from pointer', activeDrawingPointer.current);
+                rendererRef.current?.endStroke();
+                // Don't try to release capture - it may already be gone
+            }
+
             // Capture this pointer for reliable tracking
             e.currentTarget.setPointerCapture(e.pointerId);
             activeDrawingPointer.current = e.pointerId;
@@ -173,11 +181,9 @@ export const NuanceCanvas = forwardRef<NuanceCanvasHandle, NuanceCanvasProps>(({
     };
 
     const handlePointerMove = (e: React.PointerEvent) => {
-        // PEN/MOUSE: Draw
-        // IPAD FIX v1.7.5: Relaxed pointer ID check - only require active drawing state
-        // iPad may have quirky pointer ID behavior during rapid strokes
+        // PEN/MOUSE: Draw - must match the active drawing pointer
         if ((e.pointerType === 'pen' || e.pointerType === 'mouse') &&
-            activeDrawingPointer.current !== null) {
+            activeDrawingPointer.current === e.pointerId) {
             e.preventDefault();
 
             // Use coalesced events for smoother iPad/pen input
@@ -241,10 +247,8 @@ export const NuanceCanvas = forwardRef<NuanceCanvasHandle, NuanceCanvasProps>(({
 
     const handlePointerUp = (e: React.PointerEvent) => {
         if (e.pointerType === 'pen' || e.pointerType === 'mouse') {
-            // IPAD FIX v1.7.5: Always end stroke if we have an active drawing
-            // Don't strictly check pointer ID - iPad may have quirky behavior
-            if (activeDrawingPointer.current !== null) {
-                console.log('[Canvas] Pen up:', e.pointerId, '(was tracking:', activeDrawingPointer.current, ')');
+            if (activeDrawingPointer.current === e.pointerId) {
+                console.log('[Canvas] Pen up:', e.pointerId);
                 activeDrawingPointer.current = null;
                 rendererRef.current?.endStroke();
             }

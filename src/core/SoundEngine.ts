@@ -155,14 +155,15 @@ export class SoundEngine {
                     type = 'lowpass'; freq = 400; Q = 0.5;
                     break;
                 case 'ballpoint':
-                    // CLICK (High Rate)
-                    rate = 2.0; // Pitch up octave
-                    type = 'highpass'; freq = 2000; Q = 2.0;
+                    // SMOOTH CLICK v1.7.7 - Less harsh, more "rolling ball" feel
+                    rate = 1.3;  // Slight pitch up (was 2.0 - too clicky)
+                    type = 'bandpass'; freq = 800; Q = 0.8;  // Mid-range, not harsh highs
                     break;
                 case 'fountain':
-                    // METAL (Very High Res)
-                    rate = 1.2;
-                    type = 'peaking'; freq = 5000; Q = 5.0; gain = 20;
+                    // SMOOTH INK FLOW v1.7.7 - Wet, flowing feel (NOT metallic)
+                    rate = 0.9;  // Slightly lower pitch for smoothness
+                    type = 'lowpass'; freq = 400; Q = 0.3;  // Cut harsh highs, keep warmth
+                    // Old was peaking@5000Hz/Q=5/gain=20 - WAY too harsh!
                     break;
                 case 'marker':
                     // SOFT (Muffled)
@@ -221,12 +222,14 @@ export class SoundEngine {
 
     public updateStroke(velocity: number, _pressure: number) {
         if (!this.envelopeNode || !this.audioContext) return;
-        // Make Marker quieter, Ballpoint louder
+        // v1.7.7: Balanced volume factors - none should be harsh
         let factor = 1.0;
-        if (this.currentProfile === 'marker') factor = 0.6;
-        if (this.currentProfile === 'ballpoint') factor = 1.3;
+        if (this.currentProfile === 'marker') factor = 0.6;      // Soft
+        if (this.currentProfile === 'ballpoint') factor = 0.8;   // Reduced (was 1.3 - too loud)
+        if (this.currentProfile === 'fountain') factor = 0.7;    // Smooth and subtle
+        if (this.currentProfile === 'highlighter') factor = 0.5; // Very soft squeak
 
-        const targetVol = Math.min(1.2, Math.pow(velocity / 2.0, 1.2) * factor);
+        const targetVol = Math.min(1.0, Math.pow(velocity / 2.5, 1.1) * factor); // Softer curve
         this.envelopeNode.gain.setTargetAtTime(targetVol, this.audioContext.currentTime, 0.05);
     }
 
