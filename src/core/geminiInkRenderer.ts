@@ -26,7 +26,7 @@ interface Stroke {
 }
 
 export type ToolMode = 'draw' | 'select';
-export type GridType = 'none' | 'square' | 'dot' | 'ruled' | 'isometric';
+export type GridType = 'none' | 'square' | 'dot' | 'ruled' | 'isometric' | 'graph' | 'hex';
 
 type UndoAction =
     | { type: 'addStroke'; stroke: Stroke }
@@ -791,6 +791,86 @@ export class GeminiInkRenderer {
                     // Lines going from top-right to bottom-left (/)
                     this.ctx.moveTo(x1, baseY);
                     this.ctx.lineTo(x1 - rowCount * gridSize * 0.5, baseY + rowCount * isoH);
+                }
+                this.ctx.stroke();
+                break;
+            }
+
+            case 'graph': {
+                // Graph paper: minor grid (small) + major grid (emphasized)
+                const minorSize = gridSize / 4; // 10px minor divisions
+                const majorSize = gridSize; // 40px major divisions
+
+                // Minor grid lines (light)
+                this.ctx.strokeStyle = '#eaeaea';
+                this.ctx.lineWidth = 0.5 / zoom;
+                this.ctx.beginPath();
+                const minorStartX = Math.floor(worldLeft / minorSize) * minorSize;
+                const minorEndX = Math.ceil(worldRight / minorSize) * minorSize;
+                const minorStartY = Math.floor(worldTop / minorSize) * minorSize;
+                const minorEndY = Math.ceil(worldBottom / minorSize) * minorSize;
+                for (let x = minorStartX; x <= minorEndX; x += minorSize) {
+                    this.ctx.moveTo(x, worldTop);
+                    this.ctx.lineTo(x, worldBottom);
+                }
+                for (let y = minorStartY; y <= minorEndY; y += minorSize) {
+                    this.ctx.moveTo(worldLeft, y);
+                    this.ctx.lineTo(worldRight, y);
+                }
+                this.ctx.stroke();
+
+                // Major grid lines (darker, thicker)
+                this.ctx.strokeStyle = '#c8c8c8';
+                this.ctx.lineWidth = 1 / zoom;
+                this.ctx.beginPath();
+                const majorStartX = Math.floor(worldLeft / majorSize) * majorSize;
+                const majorEndX = Math.ceil(worldRight / majorSize) * majorSize;
+                const majorStartY = Math.floor(worldTop / majorSize) * majorSize;
+                const majorEndY = Math.ceil(worldBottom / majorSize) * majorSize;
+                for (let x = majorStartX; x <= majorEndX; x += majorSize) {
+                    this.ctx.moveTo(x, worldTop);
+                    this.ctx.lineTo(x, worldBottom);
+                }
+                for (let y = majorStartY; y <= majorEndY; y += majorSize) {
+                    this.ctx.moveTo(worldLeft, y);
+                    this.ctx.lineTo(worldRight, y);
+                }
+                this.ctx.stroke();
+                break;
+            }
+
+            case 'hex': {
+                // Hexagonal grid
+                this.ctx.strokeStyle = '#d8d8d8';
+                this.ctx.lineWidth = 1 / zoom;
+                const hexR = gridSize * 0.6; // hex radius (center to vertex)
+                const hexW = hexR * Math.sqrt(3); // width (flat-to-flat for pointy-top)
+                const hexH = hexR * 2;
+                const rowH = hexH * 0.75; // vertical distance between row centers
+
+                const hexStartRow = Math.floor((worldTop - hexR) / rowH) - 1;
+                const hexEndRow = Math.ceil((worldBottom + hexR) / rowH) + 1;
+                const hexStartCol = Math.floor((worldLeft - hexW) / hexW) - 1;
+                const hexEndCol = Math.ceil((worldRight + hexW) / hexW) + 1;
+
+                this.ctx.beginPath();
+                for (let row = hexStartRow; row <= hexEndRow; row++) {
+                    const cy = row * rowH;
+                    const offsetX = (row % 2 !== 0) ? hexW / 2 : 0;
+                    for (let col = hexStartCol; col <= hexEndCol; col++) {
+                        const cx = col * hexW + offsetX;
+                        // Draw hexagon (pointy-top)
+                        for (let i = 0; i < 6; i++) {
+                            const angle = (Math.PI / 3) * i - Math.PI / 6;
+                            const nextAngle = (Math.PI / 3) * (i + 1) - Math.PI / 6;
+                            const x1 = cx + hexR * Math.cos(angle);
+                            const y1 = cy + hexR * Math.sin(angle);
+                            const x2 = cx + hexR * Math.cos(nextAngle);
+                            const y2 = cy + hexR * Math.sin(nextAngle);
+                            this.ctx.moveTo(x1, y1);
+                            this.ctx.lineTo(x2, y2);
+                        }
+                    }
                 }
                 this.ctx.stroke();
                 break;

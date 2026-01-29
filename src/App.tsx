@@ -101,6 +101,8 @@ function App() {
     { id: 'dot', label: 'Dots', icon: '⁘' },
     { id: 'ruled', label: 'Ruled', icon: '☰' },
     { id: 'isometric', label: 'Iso', icon: '△' },
+    { id: 'graph', label: 'Graph', icon: '▥' },
+    { id: 'hex', label: 'Hex', icon: '⬡' },
   ];
 
   const profiles: { id: SoundProfile, label: string, icon: string }[] = [
@@ -125,7 +127,7 @@ function App() {
         pointerEvents: 'none', zIndex: 9999,
         fontFamily: 'monospace'
       }}>
-        v2.2.0
+        v2.3.0
       </div>
       <NuanceCanvas
         ref={canvasRef}
