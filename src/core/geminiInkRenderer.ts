@@ -98,6 +98,10 @@ export class GeminiInkRenderer {
     // v2.2: Rectangle selection
     private selectionRect: { sx1: number; sy1: number; sx2: number; sy2: number } | null = null;
 
+    // v2.4: Shape snap - hold still to snap stroke to perfect shape
+    private lastMoveTimestamp: number = 0;
+    private shapeSnapThreshold: number = 350; // ms of holding still to trigger snap
+
     constructor(canvas: HTMLCanvasElement, config: Partial<RenderConfig> = {}) {
         this.canvas = canvas;
         this.config = { ...DEFAULT_CONFIG, ...config };
@@ -988,6 +992,17 @@ export class GeminiInkRenderer {
         const worldPoint = this.screenToWorld(x, y);
         const now = performance.now();
 
+        // v2.4: Track last significant movement for shape snap
+        if (this.points.length > 0) {
+            const last = this.points[this.points.length - 1];
+            const moveDist = Math.hypot(worldPoint.x - last.x, worldPoint.y - last.y);
+            if (moveDist > 2) {
+                this.lastMoveTimestamp = now;
+            }
+        } else {
+            this.lastMoveTimestamp = now;
+        }
+
         const lastPoint = this.points[this.points.length - 1];
         if (!lastPoint) {
             console.log('[Renderer] addPoint - no last point, starting fresh');
@@ -1144,9 +1159,17 @@ export class GeminiInkRenderer {
         // this.stopWetLoop(); // Wet ink disabled
         this.soundEngine.endStroke();
 
-        // v1.8.3: REMOVED post-stroke smoothing - was causing "mushy" feel
-        // Streamline during drawing is sufficient for smooth strokes
-        // Premium pen experience = pen does exactly what user intends
+        // v2.4: Shape snap - if pen was held still at end, try to snap to perfect shape
+        const now = performance.now();
+        const holdDuration = now - this.lastMoveTimestamp;
+        if (holdDuration >= this.shapeSnapThreshold && this.points.length >= 4) {
+            const snappedPoints = this.detectAndSnapShape(this.points);
+            if (snappedPoints) {
+                this.points = snappedPoints;
+                console.log('[Renderer] Shape snapped!');
+            }
+        }
+
         const newStroke: Stroke = { points: [...this.points], config: { ...this.config } };
         this.strokes.push(newStroke);
         this.pushUndoAction({ type: 'addStroke', stroke: newStroke });
@@ -1169,6 +1192,178 @@ export class GeminiInkRenderer {
     // --- Incremental Tip Rendering - DISABLED FOR NOW ---
     // Kept for future optimization
     // private renderIncrementalTip() { ... }
+
+    // --- SHAPE SNAP v2.4 ---
+
+    private detectAndSnapShape(points: Point[]): Point[] | null {
+        if (points.length < 4) return null;
+
+        // Calculate bounding box
+        let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+        for (const p of points) {
+            if (p.x < minX) minX = p.x;
+            if (p.y < minY) minY = p.y;
+            if (p.x > maxX) maxX = p.x;
+            if (p.y > maxY) maxY = p.y;
+        }
+        const bboxW = maxX - minX;
+        const bboxH = maxY - minY;
+        const bboxDiag = Math.hypot(bboxW, bboxH);
+
+        // Too small to snap
+        if (bboxDiag < 20) return null;
+
+        // Check if stroke is closed (start ~= end)
+        const first = points[0];
+        const last = points[points.length - 1];
+        const closeDist = Math.hypot(last.x - first.x, last.y - first.y);
+        const isClosed = closeDist < bboxDiag * 0.25;
+
+        // Calculate centroid
+        let cx = 0, cy = 0;
+        for (const p of points) { cx += p.x; cy += p.y; }
+        cx /= points.length;
+        cy /= points.length;
+
+        // Average pressure/tilt from original points
+        const avgPressure = points.reduce((s, p) => s + p.pressure, 0) / points.length;
+        const avgTiltX = points.reduce((s, p) => s + p.tiltX, 0) / points.length;
+        const avgTiltY = points.reduce((s, p) => s + p.tiltY, 0) / points.length;
+
+        if (isClosed) {
+            // --- CLOSED SHAPES: Circle or Rectangle ---
+
+            // Test for circle: check variance of distance from centroid
+            const distances = points.map(p => Math.hypot(p.x - cx, p.y - cy));
+            const avgRadius = distances.reduce((s, d) => s + d, 0) / distances.length;
+            const variance = distances.reduce((s, d) => s + (d - avgRadius) ** 2, 0) / distances.length;
+            const stdDev = Math.sqrt(variance);
+            const circleScore = stdDev / avgRadius; // Lower = more circular
+
+            // Test for rectangle: check how well corners are defined
+            const rectScore = this.scoreRectangle(points, minX, minY, maxX, maxY);
+
+            if (circleScore < 0.15) {
+                // Snap to circle
+                return this.generateCirclePoints(cx, cy, avgRadius, avgPressure, avgTiltX, avgTiltY);
+            } else if (rectScore > 0.7) {
+                // Snap to rectangle
+                return this.generateRectPoints(minX, minY, maxX, maxY, avgPressure, avgTiltX, avgTiltY);
+            } else if (circleScore < 0.25) {
+                // Looser circle match (ellipse-ish strokes)
+                return this.generateCirclePoints(cx, cy, avgRadius, avgPressure, avgTiltX, avgTiltY);
+            } else if (rectScore > 0.5) {
+                // Looser rectangle match
+                return this.generateRectPoints(minX, minY, maxX, maxY, avgPressure, avgTiltX, avgTiltY);
+            }
+        } else {
+            // --- OPEN SHAPES: Line or Arrow ---
+
+            // Test for straight line: deviation from first-to-last line
+            const lineLen = Math.hypot(last.x - first.x, last.y - first.y);
+            if (lineLen < 10) return null;
+
+            let maxDeviation = 0;
+            for (const p of points) {
+                const d = this.pointToSegmentDist(p.x, p.y, first.x, first.y, last.x, last.y);
+                if (d > maxDeviation) maxDeviation = d;
+            }
+            const lineScore = maxDeviation / lineLen; // Lower = straighter
+
+            if (lineScore < 0.08) {
+                // Snap to straight line
+                return this.generateLinePoints(first.x, first.y, last.x, last.y, avgPressure, avgTiltX, avgTiltY);
+            }
+        }
+
+        return null; // No shape detected
+    }
+
+    private scoreRectangle(points: Point[], minX: number, minY: number, maxX: number, maxY: number): number {
+        // Score how well points fit a rectangle
+        // Check: what % of points are near the edges of the bounding box
+        const w = maxX - minX;
+        const h = maxY - minY;
+        if (w < 10 || h < 10) return 0;
+
+        const edgeThreshold = Math.min(w, h) * 0.15;
+        let nearEdge = 0;
+        for (const p of points) {
+            const distLeft = Math.abs(p.x - minX);
+            const distRight = Math.abs(p.x - maxX);
+            const distTop = Math.abs(p.y - minY);
+            const distBottom = Math.abs(p.y - maxY);
+            const minDist = Math.min(distLeft, distRight, distTop, distBottom);
+            if (minDist < edgeThreshold) nearEdge++;
+        }
+        return nearEdge / points.length;
+    }
+
+    private generateCirclePoints(cx: number, cy: number, radius: number, pressure: number, tiltX: number, tiltY: number): Point[] {
+        const numPoints = 64;
+        const result: Point[] = [];
+        const baseTime = performance.now();
+        for (let i = 0; i <= numPoints; i++) {
+            const angle = (i / numPoints) * Math.PI * 2;
+            result.push({
+                x: cx + radius * Math.cos(angle),
+                y: cy + radius * Math.sin(angle),
+                pressure,
+                timestamp: baseTime + i,
+                tiltX, tiltY
+            });
+        }
+        return result;
+    }
+
+    private generateRectPoints(minX: number, minY: number, maxX: number, maxY: number, pressure: number, tiltX: number, tiltY: number): Point[] {
+        const result: Point[] = [];
+        const baseTime = performance.now();
+        const corners = [
+            { x: minX, y: minY },
+            { x: maxX, y: minY },
+            { x: maxX, y: maxY },
+            { x: minX, y: maxY },
+            { x: minX, y: minY }, // close
+        ];
+        // Interpolate between corners for smooth rendering
+        let t = 0;
+        for (let c = 0; c < corners.length - 1; c++) {
+            const from = corners[c];
+            const to = corners[c + 1];
+            const segLen = Math.hypot(to.x - from.x, to.y - from.y);
+            const steps = Math.max(4, Math.ceil(segLen / 5));
+            for (let i = 0; i <= steps; i++) {
+                const frac = i / steps;
+                result.push({
+                    x: from.x + (to.x - from.x) * frac,
+                    y: from.y + (to.y - from.y) * frac,
+                    pressure,
+                    timestamp: baseTime + t++,
+                    tiltX, tiltY
+                });
+            }
+        }
+        return result;
+    }
+
+    private generateLinePoints(x1: number, y1: number, x2: number, y2: number, pressure: number, tiltX: number, tiltY: number): Point[] {
+        const result: Point[] = [];
+        const baseTime = performance.now();
+        const dist = Math.hypot(x2 - x1, y2 - y1);
+        const steps = Math.max(4, Math.ceil(dist / 5));
+        for (let i = 0; i <= steps; i++) {
+            const frac = i / steps;
+            result.push({
+                x: x1 + (x2 - x1) * frac,
+                y: y1 + (y2 - y1) * frac,
+                pressure,
+                timestamp: baseTime + i,
+                tiltX, tiltY
+            });
+        }
+        return result;
+    }
 
     // --- Helper Math ---
 
