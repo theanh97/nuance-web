@@ -38,7 +38,8 @@ type UndoAction =
     | { type: 'addStroke'; stroke: Stroke }
     | { type: 'delete'; deletedStrokes: { index: number; stroke: Stroke }[] }
     | { type: 'recolor'; oldConfigs: { index: number; oldColor: string }[]; newColor: string }
-    | { type: 'move'; indices: number[]; dx: number; dy: number };
+    | { type: 'move'; indices: number[]; dx: number; dy: number }
+    | { type: 'resize'; entries: { index: number; oldPoints: Point[]; newPoints: Point[] }[] };
 
 export interface RenderConfig {
     baseStrokeWidth: number;
@@ -103,6 +104,15 @@ export class GeminiInkRenderer {
 
     // v2.2: Rectangle selection
     private selectionRect: { sx1: number; sy1: number; sx2: number; sy2: number } | null = null;
+
+    // v2.8: Lasso selection
+    private lassoScreenPoints: { x: number; y: number }[] = [];
+
+    // v2.8: Resize selected
+    private resizeOriginalPoints: Map<number, Point[]> = new Map();
+    private resizeAnchor: { x: number; y: number } | null = null;
+    private resizeInitialDist: number = 0;
+    private isResizing: boolean = false;
 
     // v2.4: Shape snap - hold still to snap stroke to perfect shape
     private lastMoveTimestamp: number = 0;
@@ -560,6 +570,233 @@ export class GeminiInkRenderer {
         this.ctx.restore();
     }
 
+    // --- LASSO SELECTION v2.8 ---
+
+    public startLasso(screenX: number, screenY: number): void {
+        this.lassoScreenPoints = [{ x: screenX, y: screenY }];
+    }
+
+    public updateLasso(screenX: number, screenY: number): void {
+        this.lassoScreenPoints.push({ x: screenX, y: screenY });
+        this.requestRedraw();
+    }
+
+    public endLasso(addToSelection: boolean): void {
+        if (this.lassoScreenPoints.length < 3) {
+            this.lassoScreenPoints = [];
+            return;
+        }
+
+        // Convert screen points to world coordinates
+        const worldPoly = this.lassoScreenPoints.map(p => this.screenToWorld(p.x, p.y));
+        this.lassoScreenPoints = [];
+
+        if (!addToSelection) {
+            this.selectedIndices.clear();
+        }
+
+        // Select strokes that have their centroid inside the lasso polygon
+        for (let i = 0; i < this.strokes.length; i++) {
+            const stroke = this.strokes[i];
+            if (stroke.points.length === 0) continue;
+
+            // Use centroid of stroke for hit testing
+            let cx = 0, cy = 0;
+            for (const p of stroke.points) { cx += p.x; cy += p.y; }
+            cx /= stroke.points.length;
+            cy /= stroke.points.length;
+
+            if (this.pointInPolygon(cx, cy, worldPoly)) {
+                this.selectedIndices.add(i);
+            }
+        }
+        this.requestRedraw();
+    }
+
+    private renderLasso(): void {
+        if (this.lassoScreenPoints.length < 2) return;
+        this.ctx.save();
+        this.ctx.strokeStyle = 'rgba(0, 122, 255, 0.6)';
+        this.ctx.lineWidth = 1.5;
+        this.ctx.setLineDash([6, 4]);
+        this.ctx.fillStyle = 'rgba(0, 122, 255, 0.06)';
+        this.ctx.beginPath();
+        this.ctx.moveTo(this.lassoScreenPoints[0].x, this.lassoScreenPoints[0].y);
+        for (let i = 1; i < this.lassoScreenPoints.length; i++) {
+            this.ctx.lineTo(this.lassoScreenPoints[i].x, this.lassoScreenPoints[i].y);
+        }
+        this.ctx.closePath();
+        this.ctx.fill();
+        this.ctx.stroke();
+        this.ctx.setLineDash([]);
+        this.ctx.restore();
+    }
+
+    private pointInPolygon(x: number, y: number, polygon: { x: number; y: number }[]): boolean {
+        // Ray-casting algorithm
+        let inside = false;
+        for (let i = 0, j = polygon.length - 1; i < polygon.length; j = i++) {
+            const xi = polygon[i].x, yi = polygon[i].y;
+            const xj = polygon[j].x, yj = polygon[j].y;
+            if (((yi > y) !== (yj > y)) && (x < (xj - xi) * (y - yi) / (yj - yi) + xi)) {
+                inside = !inside;
+            }
+        }
+        return inside;
+    }
+
+    // --- RESIZE SELECTED v2.8 ---
+
+    public getSelectionBounds(): { minX: number; minY: number; maxX: number; maxY: number } | null {
+        if (this.selectedIndices.size === 0) return null;
+        let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+        for (const idx of this.selectedIndices) {
+            const stroke = this.strokes[idx];
+            if (!stroke) continue;
+            for (const p of stroke.points) {
+                if (p.x < minX) minX = p.x;
+                if (p.y < minY) minY = p.y;
+                if (p.x > maxX) maxX = p.x;
+                if (p.y > maxY) maxY = p.y;
+            }
+        }
+        if (minX === Infinity) return null;
+        return { minX, minY, maxX, maxY };
+    }
+
+    public hitTestResizeHandle(screenX: number, screenY: number): number {
+        // Returns handle index (0-3 for TL,TR,BR,BL) or -1
+        const bounds = this.getSelectionBounds();
+        if (!bounds) return -1;
+        const z = this.camera.zoom;
+        const cx = this.camera.x;
+        const cy = this.camera.y;
+        // World to screen
+        const corners = [
+            { x: (bounds.minX + cx) * z, y: (bounds.minY + cy) * z }, // TL
+            { x: (bounds.maxX + cx) * z, y: (bounds.minY + cy) * z }, // TR
+            { x: (bounds.maxX + cx) * z, y: (bounds.maxY + cy) * z }, // BR
+            { x: (bounds.minX + cx) * z, y: (bounds.maxY + cy) * z }, // BL
+        ];
+        const hitRadius = 18; // Generous touch target
+        for (let i = 0; i < 4; i++) {
+            const d = Math.hypot(screenX - corners[i].x, screenY - corners[i].y);
+            if (d <= hitRadius) return i;
+        }
+        return -1;
+    }
+
+    public startResizeSelected(_handleIndex: number, screenX: number, screenY: number): void {
+        if (this.selectedIndices.size === 0) return;
+        this.isResizing = true;
+
+        // Store original points for all selected strokes
+        this.resizeOriginalPoints.clear();
+        for (const idx of this.selectedIndices) {
+            this.resizeOriginalPoints.set(idx, this.strokes[idx].points.map(p => ({ ...p })));
+        }
+
+        // Anchor = center of selection bounds (world coords)
+        const bounds = this.getSelectionBounds()!;
+        this.resizeAnchor = {
+            x: (bounds.minX + bounds.maxX) / 2,
+            y: (bounds.minY + bounds.maxY) / 2
+        };
+
+        // Initial distance from anchor to pointer (world coords)
+        const world = this.screenToWorld(screenX, screenY);
+        this.resizeInitialDist = Math.hypot(world.x - this.resizeAnchor.x, world.y - this.resizeAnchor.y);
+        if (this.resizeInitialDist < 1) this.resizeInitialDist = 1;
+    }
+
+    public updateResizeSelected(screenX: number, screenY: number): void {
+        if (!this.isResizing || !this.resizeAnchor) return;
+
+        const world = this.screenToWorld(screenX, screenY);
+        const currentDist = Math.hypot(world.x - this.resizeAnchor.x, world.y - this.resizeAnchor.y);
+        let scale = currentDist / this.resizeInitialDist;
+        // Clamp scale to reasonable range
+        scale = Math.max(0.1, Math.min(10, scale));
+
+        const ax = this.resizeAnchor.x;
+        const ay = this.resizeAnchor.y;
+
+        // Apply scale from originals (no cumulative error)
+        for (const [idx, origPoints] of this.resizeOriginalPoints) {
+            const stroke = this.strokes[idx];
+            if (!stroke) continue;
+            for (let i = 0; i < stroke.points.length && i < origPoints.length; i++) {
+                stroke.points[i].x = ax + (origPoints[i].x - ax) * scale;
+                stroke.points[i].y = ay + (origPoints[i].y - ay) * scale;
+            }
+        }
+        this.requestRedraw();
+    }
+
+    public endResizeSelected(): void {
+        if (!this.isResizing) return;
+        this.isResizing = false;
+
+        // Build undo action with original and new points
+        const entries: { index: number; oldPoints: Point[]; newPoints: Point[] }[] = [];
+        for (const [idx, origPoints] of this.resizeOriginalPoints) {
+            const stroke = this.strokes[idx];
+            if (!stroke) continue;
+            entries.push({
+                index: idx,
+                oldPoints: origPoints,
+                newPoints: stroke.points.map(p => ({ ...p }))
+            });
+        }
+        if (entries.length > 0) {
+            this.pushUndoAction({ type: 'resize', entries });
+        }
+
+        this.resizeOriginalPoints.clear();
+        this.resizeAnchor = null;
+    }
+
+    private renderResizeHandles(): void {
+        if (this.selectedIndices.size === 0 || this.isResizing) return;
+        const bounds = this.getSelectionBounds();
+        if (!bounds) return;
+
+        const z = this.camera.zoom;
+        const cx = this.camera.x;
+        const cy = this.camera.y;
+        // World to screen
+        const corners = [
+            { x: (bounds.minX + cx) * z, y: (bounds.minY + cy) * z },
+            { x: (bounds.maxX + cx) * z, y: (bounds.minY + cy) * z },
+            { x: (bounds.maxX + cx) * z, y: (bounds.maxY + cy) * z },
+            { x: (bounds.minX + cx) * z, y: (bounds.maxY + cy) * z },
+        ];
+
+        this.ctx.save();
+        // Draw bounding box
+        this.ctx.strokeStyle = 'rgba(0, 122, 255, 0.4)';
+        this.ctx.lineWidth = 1;
+        this.ctx.setLineDash([6, 4]);
+        this.ctx.beginPath();
+        this.ctx.moveTo(corners[0].x, corners[0].y);
+        for (let i = 1; i < 4; i++) this.ctx.lineTo(corners[i].x, corners[i].y);
+        this.ctx.closePath();
+        this.ctx.stroke();
+        this.ctx.setLineDash([]);
+
+        // Draw corner handles
+        for (const c of corners) {
+            this.ctx.beginPath();
+            this.ctx.arc(c.x, c.y, 6, 0, Math.PI * 2);
+            this.ctx.fillStyle = 'white';
+            this.ctx.fill();
+            this.ctx.strokeStyle = '#007AFF';
+            this.ctx.lineWidth = 2;
+            this.ctx.stroke();
+        }
+        this.ctx.restore();
+    }
+
     // --- SELECTION HIGHLIGHT RENDERING ---
     private renderSelectionHighlight(stroke: Stroke): void {
         const points = stroke.points;
@@ -629,6 +866,15 @@ export class GeminiInkRenderer {
                 this.redoActionStack.push(action);
                 break;
             }
+            case 'resize': {
+                for (const entry of action.entries) {
+                    if (this.strokes[entry.index]) {
+                        this.strokes[entry.index].points = entry.oldPoints.map(p => ({ ...p }));
+                    }
+                }
+                this.redoActionStack.push(action);
+                break;
+            }
         }
         this.requestRedraw();
         return true;
@@ -667,6 +913,15 @@ export class GeminiInkRenderer {
                             p.x += action.dx;
                             p.y += action.dy;
                         }
+                    }
+                }
+                this.undoStack.push(action);
+                break;
+            }
+            case 'resize': {
+                for (const entry of action.entries) {
+                    if (this.strokes[entry.index]) {
+                        this.strokes[entry.index].points = entry.newPoints.map(p => ({ ...p }));
                     }
                 }
                 this.undoStack.push(action);
@@ -728,6 +983,9 @@ export class GeminiInkRenderer {
 
         // v2.2: Selection rectangle overlay (screen space, after camera restore)
         this.renderSelectionRect();
+        // v2.8: Lasso overlay + resize handles (screen space)
+        this.renderLasso();
+        this.renderResizeHandles();
     }
 
     private drawGrid() {
@@ -1392,10 +1650,11 @@ export class GeminiInkRenderer {
         cx /= points.length;
         cy /= points.length;
 
-        // Average pressure/tilt from original points
-        const avgPressure = rawPoints.reduce((s, p) => s + p.pressure, 0) / rawPoints.length;
-        const avgTiltX = rawPoints.reduce((s, p) => s + p.tiltX, 0) / rawPoints.length;
-        const avgTiltY = rawPoints.reduce((s, p) => s + p.tiltY, 0) / rawPoints.length;
+        // Average pressure/tilt from filtered points (not rawPoints, which includes
+        // hold-still points at the end where pressure often drops to near-zero)
+        const avgPressure = points.reduce((s, p) => s + p.pressure, 0) / points.length;
+        const avgTiltX = points.reduce((s, p) => s + p.tiltX, 0) / points.length;
+        const avgTiltY = points.reduce((s, p) => s + p.tiltY, 0) / points.length;
 
         if (isClosed) {
             // --- CLOSED SHAPES: Circle, Ellipse, or Rectangle ---

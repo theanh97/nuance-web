@@ -13,7 +13,7 @@ function App() {
   const [soundProfile, setSoundProfile] = useState<SoundProfile>('pencil');
   const [soundVolume, setSoundVolume] = useState(0.5);
   const [strokeColor, setStrokeColor] = useState('#333333');
-  const [hapticEnabled, setHapticEnabled] = useState(false);
+  const [hapticEnabled, setHapticEnabled] = useState(true);
   const [surfaceTexture, setSurfaceTexture] = useState(0.4);
   const [isEmbedMode, setIsEmbedMode] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
@@ -22,6 +22,7 @@ function App() {
   const [toolMode, setToolMode] = useState<'draw' | 'select'>('draw');
   const [selectedCount, setSelectedCount] = useState(0);
   const [multiSelectMode, setMultiSelectMode] = useState(false);
+  const [selectionType, setSelectionType] = useState<'rect' | 'lasso'>('lasso');
   const [gridType, setGridType] = useState<GridType>('square');
   const [isFullscreen, setIsFullscreen] = useState(false);
 
@@ -195,7 +196,7 @@ function App() {
         pointerEvents: 'none', zIndex: 9999,
         fontFamily: 'monospace'
       }}>
-        v2.7.0
+        v2.8.0
       </div>
       <NuanceCanvas
         ref={canvasRef}
@@ -209,6 +210,7 @@ function App() {
         surfaceTexture={surfaceTexture}
         onSelectionChange={(count) => setSelectedCount(count)}
         multiSelectMode={multiSelectMode}
+        selectionType={selectionType}
       />
 
       {/* Dock */}
@@ -370,6 +372,14 @@ function App() {
               </div>
 
               <div className="dock-divider" />
+
+              <button
+                className={`dock-btn btn-icon ${selectionType === 'rect' ? 'active' : ''}`}
+                onClick={() => setSelectionType(selectionType === 'lasso' ? 'rect' : 'lasso')}
+                title={selectionType === 'lasso' ? 'Lasso select' : 'Rect select'}
+              >
+                {selectionType === 'lasso' ? '○' : '▭'}
+              </button>
 
               <button
                 className={`dock-btn btn-icon ${multiSelectMode ? 'active' : ''}`}

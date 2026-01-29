@@ -1,9 +1,11 @@
 import { useRef, forwardRef, useImperativeHandle, useEffect, useState } from 'react';
-import { GeminiInkRenderer, type GridType } from '../core/geminiInkRenderer';
+import { GeminiInkRenderer, type GridType, type SerializedDrawing } from '../core/geminiInkRenderer';
 import { type SoundProfile } from '../core/SoundEngine';
 
 export interface NuanceCanvasHandle {
     exportImage: () => Promise<string>;
+    exportStrokes: () => SerializedDrawing | null;
+    loadStrokes: (data: SerializedDrawing) => void;
     undo: () => boolean;
     redo: () => boolean;
     canUndo: () => boolean;
@@ -32,9 +34,11 @@ interface NuanceCanvasProps {
     // v2.0: Selection tool
     onSelectionChange?: (count: number) => void;
     multiSelectMode?: boolean;
+    selectionType?: 'rect' | 'lasso';
+    interactionMode?: 'edit' | 'view';
 }
 
-export const NuanceCanvas = forwardRef<NuanceCanvasHandle, NuanceCanvasProps>(({ brushSize, penOnly: _penOnly, soundProfile, soundVolume, strokeColor, smoothing, hapticEnabled = false, surfaceTexture = 0.4, onSelectionChange, multiSelectMode = false }, ref) => {
+export const NuanceCanvas = forwardRef<NuanceCanvasHandle, NuanceCanvasProps>(({ brushSize, penOnly: _penOnly, soundProfile, soundVolume, strokeColor, smoothing, hapticEnabled = false, surfaceTexture = 0.4, onSelectionChange, multiSelectMode = false, selectionType = 'lasso', interactionMode = 'edit' }, ref) => {
     const canvasRef = useRef<HTMLCanvasElement>(null);
     const rendererRef = useRef<GeminiInkRenderer | null>(null);
 
@@ -44,6 +48,17 @@ export const NuanceCanvas = forwardRef<NuanceCanvasHandle, NuanceCanvasProps>(({
                 return await rendererRef.current.exportImage();
             }
             return '';
+        },
+        exportStrokes: () => {
+            if (rendererRef.current) {
+                return rendererRef.current.exportStrokes();
+            }
+            return null;
+        },
+        loadStrokes: (data: SerializedDrawing) => {
+            if (rendererRef.current) {
+                rendererRef.current.loadStrokes(data);
+            }
         },
         undo: () => {
             if (rendererRef.current) {
@@ -180,10 +195,14 @@ export const NuanceCanvas = forwardRef<NuanceCanvasHandle, NuanceCanvasProps>(({
     const prevDist = useRef<number | null>(null);
     const prevCenter = useRef<{ x: number, y: number } | null>(null); // 2-finger pan while pinching
     const activeDrawingPointer = useRef<number | null>(null);
+    const viewPanPointerId = useRef<number | null>(null);
+    const viewPanLast = useRef<{ x: number; y: number } | null>(null);
 
     // v2.0: Selection mode refs
     const isSelectDragging = useRef(false);
-    const isRectSelecting = useRef(false); // v2.2: rectangle selection vs move
+    const isRectSelecting = useRef(false); // v2.2: rectangle selection vs move (now also lasso)
+    const isResizeDragging = useRef(false); // v2.8: resize handle drag
+    const resizeHandleIndex = useRef(-1);
     const selectPointerStart = useRef<{ x: number, y: number } | null>(null);
     const selectPointerId = useRef<number | null>(null);
 
@@ -218,6 +237,12 @@ export const NuanceCanvas = forwardRef<NuanceCanvasHandle, NuanceCanvasProps>(({
 
             const { x, y } = getCanvasCoords(e);
 
+            if (interactionMode === 'view') {
+                viewPanPointerId.current = e.pointerId;
+                viewPanLast.current = { x: e.clientX, y: e.clientY };
+                return;
+            }
+
             // Branch: Draw mode vs Select mode
             if (renderer.getToolMode() === 'select') {
                 // Select mode: record start for tap vs drag detection
@@ -225,14 +250,29 @@ export const NuanceCanvas = forwardRef<NuanceCanvasHandle, NuanceCanvasProps>(({
                 selectPointerStart.current = { x, y };
                 isSelectDragging.current = false;
                 isRectSelecting.current = false;
+                isResizeDragging.current = false;
+                resizeHandleIndex.current = -1;
 
-                // If tapping on an already-selected stroke, prepare for move drag
-                const hitIndex = renderer.hitTestStroke(x, y);
-                if (hitIndex !== -1 && renderer.getSelectedIndices().has(hitIndex)) {
-                    renderer.startMoveSelected(x, y);
+                // v2.8: Check resize handle first
+                const handle = renderer.hitTestResizeHandle(x, y);
+                if (handle !== -1) {
+                    resizeHandleIndex.current = handle;
+                    renderer.startResizeSelected(handle, x, y);
+                    isResizeDragging.current = true;
+                    isSelectDragging.current = true;
                 } else {
-                    // Will become rectangle selection if pointer moves enough
-                    renderer.startSelectionRect(x, y);
+                    // If tapping on an already-selected stroke, prepare for move drag
+                    const hitIndex = renderer.hitTestStroke(x, y);
+                    if (hitIndex !== -1 && renderer.getSelectedIndices().has(hitIndex)) {
+                        renderer.startMoveSelected(x, y);
+                    } else {
+                        // v2.8: Start selection (lasso or rect based on selectionType)
+                        if (selectionType === 'rect') {
+                            renderer.startSelectionRect(x, y);
+                        } else {
+                            renderer.startLasso(x, y);
+                        }
+                    }
                 }
             } else {
                 // Draw mode: start stroke as normal
@@ -264,10 +304,27 @@ export const NuanceCanvas = forwardRef<NuanceCanvasHandle, NuanceCanvasProps>(({
             const renderer = rendererRef.current;
             if (!renderer) return;
 
+            if (interactionMode === 'view' && viewPanPointerId.current === e.pointerId) {
+                e.preventDefault();
+                const last = viewPanLast.current;
+                if (last) {
+                    renderer.pan(e.clientX - last.x, e.clientY - last.y);
+                }
+                viewPanLast.current = { x: e.clientX, y: e.clientY };
+                return;
+            }
+
             // Select mode drag
             if (renderer.getToolMode() === 'select' && selectPointerId.current === e.pointerId) {
                 e.preventDefault();
                 const { x, y } = getCanvasCoords(e);
+
+                // v2.8: Resize drag
+                if (isResizeDragging.current) {
+                    renderer.updateResizeSelected(x, y);
+                    return;
+                }
+
                 const start = selectPointerStart.current;
 
                 if (start) {
@@ -276,18 +333,22 @@ export const NuanceCanvas = forwardRef<NuanceCanvasHandle, NuanceCanvasProps>(({
                     if (dist > 5) {
                         if (!isSelectDragging.current) {
                             isSelectDragging.current = true;
-                            // Determine: move drag or rectangle selection
-                            // If pointerDown hit a selected stroke → move; otherwise → rect select
+                            // Determine: move drag or lasso selection
                             const hitIndex = renderer.hitTestStroke(start.x, start.y);
                             if (hitIndex !== -1 && renderer.getSelectedIndices().has(hitIndex)) {
-                                isRectSelecting.current = false;
+                                isRectSelecting.current = false; // move
                             } else {
-                                isRectSelecting.current = true;
+                                isRectSelecting.current = true; // lasso
                             }
                         }
 
                         if (isRectSelecting.current) {
-                            renderer.updateSelectionRect(x, y);
+                            // v2.8: Selection (lasso or rect)
+                            if (selectionType === 'rect') {
+                                renderer.updateSelectionRect(x, y);
+                            } else {
+                                renderer.updateLasso(x, y);
+                            }
                         } else {
                             renderer.updateMoveSelected(x, y);
                         }
@@ -331,6 +392,12 @@ export const NuanceCanvas = forwardRef<NuanceCanvasHandle, NuanceCanvasProps>(({
             // Calculate delta
             const dx = e.clientX - p.x;
             const dy = e.clientY - p.y;
+            const dist = Math.sqrt(dx * dx + dy * dy); // Distance moved
+
+            // PALM ANCHOR v2.0: Trigger Friction Sound
+            // Velocity calculation (rough approx)
+            const velocity = dist * 2; // Simple scaling
+            rendererRef.current?.updatePalm(velocity);
 
             activePointers.current.set(e.pointerId, { x: e.clientX, y: e.clientY });
 
@@ -373,22 +440,39 @@ export const NuanceCanvas = forwardRef<NuanceCanvasHandle, NuanceCanvasProps>(({
         if (e.pointerType === 'pen' || e.pointerType === 'mouse') {
             const renderer = rendererRef.current;
 
+            if (interactionMode === 'view' && viewPanPointerId.current === e.pointerId) {
+                viewPanPointerId.current = null;
+                viewPanLast.current = null;
+                return;
+            }
+
             // Select mode
             if (renderer?.getToolMode() === 'select' && selectPointerId.current === e.pointerId) {
                 const { x, y } = getCanvasCoords(e);
 
-                if (isSelectDragging.current) {
+                if (isResizeDragging.current) {
+                    // v2.8: End resize
+                    renderer.endResizeSelected();
+                } else if (isSelectDragging.current) {
                     if (isRectSelecting.current) {
-                        // End rectangle selection
-                        renderer.endSelectionRect(multiSelectMode);
+                        // v2.8: End selection (lasso or rect)
+                        if (selectionType === 'rect') {
+                            renderer.endSelectionRect(multiSelectMode);
+                        } else {
+                            renderer.endLasso(multiSelectMode);
+                        }
                     } else {
                         // End drag-to-move
                         renderer.endMoveSelected();
                     }
                 } else {
                     // Tap = select/deselect stroke
-                    // Cancel any started rect that didn't pass threshold
-                    renderer.endSelectionRect(false);
+                    // Cancel any started selection that didn't pass threshold
+                    if (selectionType === 'rect') {
+                        renderer.endSelectionRect(false);
+                    } else {
+                        renderer.endLasso(false);
+                    }
                     renderer.selectStroke(x, y, multiSelectMode);
                 }
 
@@ -396,6 +480,8 @@ export const NuanceCanvas = forwardRef<NuanceCanvasHandle, NuanceCanvasProps>(({
                 selectPointerStart.current = null;
                 isSelectDragging.current = false;
                 isRectSelecting.current = false;
+                isResizeDragging.current = false;
+                resizeHandleIndex.current = -1;
                 notifySelectionChange();
                 return;
             }
@@ -422,9 +508,15 @@ export const NuanceCanvas = forwardRef<NuanceCanvasHandle, NuanceCanvasProps>(({
         }
         // Also handle select mode lost capture
         if (selectPointerId.current === e.pointerId) {
-            if (isSelectDragging.current) {
+            if (isResizeDragging.current) {
+                rendererRef.current?.endResizeSelected();
+            } else if (isSelectDragging.current) {
                 if (isRectSelecting.current) {
-                    rendererRef.current?.endSelectionRect(multiSelectMode);
+                    if (selectionType === 'rect') {
+                        rendererRef.current?.endSelectionRect(multiSelectMode);
+                    } else {
+                        rendererRef.current?.endLasso(multiSelectMode);
+                    }
                 } else {
                     rendererRef.current?.endMoveSelected();
                 }
@@ -433,7 +525,13 @@ export const NuanceCanvas = forwardRef<NuanceCanvasHandle, NuanceCanvasProps>(({
             selectPointerStart.current = null;
             isSelectDragging.current = false;
             isRectSelecting.current = false;
+            isResizeDragging.current = false;
+            resizeHandleIndex.current = -1;
             notifySelectionChange();
+        }
+        if (viewPanPointerId.current === e.pointerId) {
+            viewPanPointerId.current = null;
+            viewPanLast.current = null;
         }
     };
 
@@ -480,7 +578,11 @@ export const NuanceCanvas = forwardRef<NuanceCanvasHandle, NuanceCanvasProps>(({
                     position: 'absolute',
                     top: 0, left: 0,
                     width: '100%', height: '100%',
-                    cursor: rendererRef.current?.getToolMode() === 'select' ? 'pointer' : (_penOnly ? 'none' : 'crosshair'),
+                    cursor: interactionMode === 'view'
+                        ? 'grab'
+                        : rendererRef.current?.getToolMode() === 'select'
+                            ? 'pointer'
+                            : (_penOnly ? 'none' : 'crosshair'),
                     touchAction: 'none', // Critical for Pointer Events
                     WebkitUserSelect: 'none', // iOS Text Selection
                     WebkitTouchCallout: 'none', // iOS Long Press
