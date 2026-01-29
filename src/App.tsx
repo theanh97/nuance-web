@@ -13,7 +13,7 @@ function App() {
   const [soundProfile, setSoundProfile] = useState<SoundProfile>('pencil');
   const [soundVolume, setSoundVolume] = useState(0.5);
   const [strokeColor, setStrokeColor] = useState('#333333');
-  const [hapticEnabled, setHapticEnabled] = useState(true);
+  const [hapticEnabled, setHapticEnabled] = useState(false);
   const [surfaceTexture, setSurfaceTexture] = useState(0.4);
   const [isEmbedMode, setIsEmbedMode] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
@@ -66,6 +66,20 @@ function App() {
       const blob = await res.blob();
       const file = new File([blob], `nuance-art-${Date.now()}.png`, { type: 'image/png' });
 
+      // Always try to copy to clipboard simultaneously
+      let copiedToClipboard = false;
+      if (typeof navigator.clipboard !== 'undefined' && typeof navigator.clipboard.write === 'function') {
+        try {
+          await navigator.clipboard.write([
+            new ClipboardItem({ [blob.type]: blob })
+          ]);
+          copiedToClipboard = true;
+        } catch (clipErr) {
+          console.warn("Clipboard copy failed", clipErr);
+        }
+      }
+
+      // Then share or download
       if (typeof navigator.share === 'function' && navigator.canShare && navigator.canShare({ files: [file] })) {
         await navigator.share({
           files: [file],
@@ -75,24 +89,17 @@ function App() {
         return;
       }
 
-      if (typeof navigator.clipboard !== 'undefined' && typeof navigator.clipboard.write === 'function') {
-        try {
-          await navigator.clipboard.write([
-            new ClipboardItem({ [blob.type]: blob })
-          ]);
-          alert("Copied to clipboard!");
-          return;
-        } catch (clipErr) {
-          console.warn("Clipboard failed, falling back to download", clipErr);
-        }
-      }
-
+      // Download file
       const link = document.createElement('a');
       link.download = `nuance-art-${Date.now()}.png`;
       link.href = dataUrl;
       document.body.appendChild(link);
       link.click();
       document.body.removeChild(link);
+
+      if (copiedToClipboard) {
+        alert("Exported & copied to clipboard!");
+      }
 
     } catch (err) {
       console.error("Export failed", err);
@@ -196,7 +203,7 @@ function App() {
         pointerEvents: 'none', zIndex: 9999,
         fontFamily: 'monospace'
       }}>
-        v2.8.0
+        v2.8.1
       </div>
       <NuanceCanvas
         ref={canvasRef}

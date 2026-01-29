@@ -83,6 +83,8 @@ export class GeminiInkRenderer {
 
     // Block redraw during active stroke to prevent visual glitches
     private blockRedraw: boolean = false;
+    private redrawPending: boolean = false;
+    private isGesturing: boolean = false;
 
     // MOTION PREDICTION v1.7.5: Reduce perceived latency
     private velocityHistory: { vx: number; vy: number; timestamp: number }[] = [];
@@ -947,19 +949,28 @@ export class GeminiInkRenderer {
         this.clearSelection();
     }
 
+    public setGesturing(active: boolean): void {
+        this.isGesturing = active;
+        if (!active) this.requestRedraw(); // Full quality redraw on gesture end
+    }
+
     private requestRedraw() {
         // Block redraw during active stroke to prevent visual glitches
         if (this.blockRedraw) {
-            console.log('[Renderer] Redraw blocked - stroke in progress');
             return;
         }
-        requestAnimationFrame(() => this.redrawAll());
+        if (this.redrawPending) return; // Deduplicate rAF calls
+        this.redrawPending = true;
+        requestAnimationFrame(() => {
+            this.redrawPending = false;
+            this.redrawAll();
+        });
     }
 
     private redrawAll() {
         this.ctx.clearRect(0, 0, this.canvas.width / this.dpr, this.canvas.height / this.dpr);
         this.drawPaperBackground();
-        this.drawGrid();
+        if (!this.isGesturing) this.drawGrid(); // Skip grid during pinch/pan for perf
         this.ctx.save();
 
         // Camera Transform: Screen = (World + Pan) * Zoom

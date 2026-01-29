@@ -285,6 +285,7 @@ export const NuanceCanvas = forwardRef<NuanceCanvasHandle, NuanceCanvasProps>(({
         // 2. TOUCH: Always Gesture (Never Draw)
         if (e.pointerType === 'touch') {
             activePointers.current.set(e.pointerId, { x: e.clientX, y: e.clientY });
+            rendererRef.current?.setGesturing(true);
 
             // Pinch Init
             if (activePointers.current.size === 2) {
@@ -496,6 +497,9 @@ export const NuanceCanvas = forwardRef<NuanceCanvasHandle, NuanceCanvasProps>(({
             if (activePointers.current.size < 2) {
                 prevDist.current = null;
                 prevCenter.current = null;
+            }
+            if (activePointers.current.size === 0) {
+                rendererRef.current?.setGesturing(false);
             }
         }
     };
