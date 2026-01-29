@@ -1198,6 +1198,21 @@ export class GeminiInkRenderer {
         // this.stopWetLoop(); // Wet ink disabled
         this.soundEngine.endStroke();
 
+        // v2.7: Scratch-to-erase — check before shape snap or saving
+        if (this.isScratchGesture(this.points)) {
+            const erased = this.eraseStrokesUnderScratch(this.points);
+            this.points = [];
+            if (erased) {
+                console.log('[Renderer] Scratch-to-erase triggered!');
+            }
+            if (this.pendingResize) {
+                this.doResize();
+            } else {
+                this.requestRedraw();
+            }
+            return; // Don't save the scratch stroke
+        }
+
         // v2.4: Shape snap - if pen was held still at end, try to snap to perfect shape
         const now = performance.now();
         const holdDuration = now - this.lastMoveTimestamp;
@@ -1231,6 +1246,96 @@ export class GeminiInkRenderer {
     // --- Incremental Tip Rendering - DISABLED FOR NOW ---
     // Kept for future optimization
     // private renderIncrementalTip() { ... }
+
+    // --- SCRATCH-TO-ERASE v2.7 ---
+
+    private isScratchGesture(points: Point[]): boolean {
+        // Scratch = rapid back-and-forth motion in a confined area.
+        // Detect by counting horizontal direction reversals.
+        if (points.length < 15) return false;
+
+        let reversals = 0;
+        let lastDir = 0;
+        let totalTravel = 0;
+
+        for (let i = 1; i < points.length; i++) {
+            const dx = points[i].x - points[i - 1].x;
+            const dy = points[i].y - points[i - 1].y;
+            totalTravel += Math.hypot(dx, dy);
+
+            // Only count direction when movement is significant (avoid noise)
+            if (Math.abs(dx) > 2) {
+                const dir = dx > 0 ? 1 : -1;
+                if (lastDir !== 0 && dir !== lastDir) {
+                    reversals++;
+                }
+                lastDir = dir;
+            }
+        }
+
+        // Bbox of the scratch area
+        let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+        for (const p of points) {
+            if (p.x < minX) minX = p.x;
+            if (p.y < minY) minY = p.y;
+            if (p.x > maxX) maxX = p.x;
+            if (p.y > maxY) maxY = p.y;
+        }
+        const bboxDiag = Math.hypot(maxX - minX, maxY - minY);
+
+        // Scratch: at least 4 reversals AND total travel >> bbox diagonal
+        // (back-and-forth covering the same area many times)
+        const isScratch = reversals >= 4 && totalTravel > bboxDiag * 2.5;
+        if (isScratch) {
+            console.log(`[ScratchErase] Detected: ${reversals} reversals, travel=${totalTravel.toFixed(0)}, bbox=${bboxDiag.toFixed(0)}`);
+        }
+        return isScratch;
+    }
+
+    private eraseStrokesUnderScratch(scratchPoints: Point[]): boolean {
+        // Find bounding box of the scratch gesture
+        let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+        for (const p of scratchPoints) {
+            if (p.x < minX) minX = p.x;
+            if (p.y < minY) minY = p.y;
+            if (p.x > maxX) maxX = p.x;
+            if (p.y > maxY) maxY = p.y;
+        }
+
+        // Expand scratch area slightly for forgiving hit detection
+        const margin = 5;
+        minX -= margin; minY -= margin; maxX += margin; maxY += margin;
+
+        // Find all strokes that have any point inside the scratch bbox
+        const toDelete: number[] = [];
+        for (let i = 0; i < this.strokes.length; i++) {
+            const stroke = this.strokes[i];
+            for (const p of stroke.points) {
+                if (p.x >= minX && p.x <= maxX && p.y >= minY && p.y <= maxY) {
+                    toDelete.push(i);
+                    break;
+                }
+            }
+        }
+
+        if (toDelete.length === 0) return false;
+
+        // Delete strokes from end to preserve indices
+        const indices = toDelete.sort((a, b) => b - a);
+        const deletedStrokes: { index: number; stroke: Stroke }[] = [];
+        for (const idx of indices) {
+            deletedStrokes.push({ index: idx, stroke: this.strokes[idx] });
+            this.strokes.splice(idx, 1);
+        }
+        this.pushUndoAction({ type: 'delete', deletedStrokes });
+
+        // Clear selection if any selected strokes were deleted
+        if (this.selectedIndices.size > 0) {
+            this.clearSelection();
+        }
+
+        return true;
+    }
 
     // --- SHAPE SNAP v2.4 ---
 
