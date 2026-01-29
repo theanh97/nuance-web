@@ -2,6 +2,8 @@ import { useState, useRef, useEffect } from 'react';
 import { NuanceCanvas, type NuanceCanvasHandle } from './components/NuanceCanvas';
 import { type SoundProfile } from './core/SoundEngine';
 import { type GridType } from './core/geminiInkRenderer';
+import { createShare } from './core/share';
+import { Player } from './components/Player';
 import './App.css';
 
 function App() {
@@ -28,6 +30,9 @@ function App() {
   // v2.1: Grid type selection
   const [gridType, setGridType] = useState<GridType>('square');
 
+  // v2.5: Fullscreen
+  const [isFullscreen, setIsFullscreen] = useState(false);
+
   useEffect(() => {
     // Check for embed mode
     const params = new URLSearchParams(window.location.search);
@@ -35,6 +40,28 @@ function App() {
       setIsEmbedMode(true);
     }
   }, []);
+
+  useEffect(() => {
+    const onFsChange = () => setIsFullscreen(!!document.fullscreenElement);
+    document.addEventListener('fullscreenchange', onFsChange);
+    return () => document.removeEventListener('fullscreenchange', onFsChange);
+  }, []);
+
+  const toggleFullscreen = () => {
+    if (document.fullscreenElement) {
+      document.exitFullscreen();
+    } else {
+      document.documentElement.requestFullscreen();
+    }
+  };
+
+  const path = window.location.pathname;
+  if (path.startsWith('/s/')) {
+    const shareId = path.split('/s/')[1];
+    if (shareId) {
+      return <Player shareId={shareId} />;
+    }
+  }
 
   const handleShare = async () => {
     if (!canvasRef.current) return;
@@ -84,6 +111,33 @@ function App() {
     }
   };
 
+  const handleShareLink = async () => {
+    if (!canvasRef.current) return;
+    try {
+      const drawing = canvasRef.current.exportStrokes();
+      if (!drawing) return;
+      const { url } = await createShare(drawing);
+
+      if (typeof navigator.share === 'function') {
+        await navigator.share({
+          title: 'Nuance Share',
+          text: 'View my Nuance drawing',
+          url
+        });
+        return;
+      }
+
+      if (navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(url);
+        alert('✅ Link copied!');
+      } else {
+        alert(url);
+      }
+    } catch (err) {
+      alert(`Share failed: ${(err as Error).message}`);
+    }
+  };
+
   const sizes = [4, 8, 12, 16];
   const primaryColors = ['#333333', '#cc3300', '#ff9900', '#009944', '#0055cc', '#ffffff'];
   const extendedColors = [
@@ -127,7 +181,7 @@ function App() {
         pointerEvents: 'none', zIndex: 9999,
         fontFamily: 'monospace'
       }}>
-        v2.4.0
+        v2.5.0
       </div>
       <NuanceCanvas
         ref={canvasRef}
@@ -311,6 +365,17 @@ function App() {
                 {/* Export */}
                 <button className="dock-btn btn-primary" onClick={handleShare}>
                   Export
+                </button>
+                <button className="dock-btn btn-primary" onClick={handleShareLink}>
+                  Share Link
+                </button>
+                <button
+                  className={`dock-btn btn-icon ${isFullscreen ? 'active' : ''}`}
+                  onClick={toggleFullscreen}
+                  title={isFullscreen ? 'Exit Fullscreen' : 'Fullscreen'}
+                  style={{ fontSize: '16px' }}
+                >
+                  {isFullscreen ? '⊡' : '⛶'}
                 </button>
 
                 <div className="dock-divider" />
