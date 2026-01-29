@@ -182,6 +182,19 @@
   .profile-label {
     display: none;
   }
+
+  .grid-chip {
+    min-width: 24px;
+    padding: 2px 3px;
+  }
+
+  .grid-icon {
+    font-size: 11px;
+  }
+
+  .grid-label {
+    display: none;
+  }
 }
 
 /* Small screens / Portrait phones */
@@ -387,6 +400,44 @@
   font-size: 10px;
   font-weight: 500;
   color: #666;
+}
+
+/* Grid Type Chips */
+.grid-chip {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 4px 8px;
+  border-radius: 8px;
+  background: transparent;
+  border: 1px solid transparent;
+  cursor: pointer;
+  transition: all 0.2s;
+  flex-shrink: 0;
+  min-width: 40px;
+}
+
+.grid-chip:hover {
+  background: rgba(0, 0, 0, 0.03);
+}
+
+.grid-chip.active {
+  background: white;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
+  border-color: rgba(0, 0, 0, 0.05);
+}
+
+.grid-icon {
+  font-size: 16px;
+  line-height: 1;
+  margin-bottom: 1px;
+}
+
+.grid-label {
+  font-size: 9px;
+  font-weight: 500;
+  color: #888;
 }
 
 /* Sliders */

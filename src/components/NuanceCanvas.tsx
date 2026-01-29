@@ -1,5 +1,5 @@
 import { useRef, forwardRef, useImperativeHandle, useEffect, useState } from 'react';
-import { GeminiInkRenderer } from '../core/geminiInkRenderer';
+import { GeminiInkRenderer, type GridType } from '../core/geminiInkRenderer';
 import { type SoundProfile } from '../core/SoundEngine';
 
 export interface NuanceCanvasHandle {
@@ -16,6 +16,8 @@ export interface NuanceCanvasHandle {
     deleteSelected: () => boolean;
     changeSelectedColor: (color: string) => boolean;
     clearSelection: () => void;
+    // v2.1: Grid types
+    setGridType: (type: GridType) => void;
 }
 
 interface NuanceCanvasProps {
@@ -103,6 +105,12 @@ export const NuanceCanvas = forwardRef<NuanceCanvasHandle, NuanceCanvasProps>(({
         clearSelection: () => {
             if (rendererRef.current) {
                 rendererRef.current.clearSelection();
+            }
+        },
+        // v2.1: Grid types
+        setGridType: (type: GridType) => {
+            if (rendererRef.current) {
+                rendererRef.current.setGridType(type);
             }
         }
     }));

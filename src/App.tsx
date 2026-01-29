@@ -1,6 +1,7 @@
 import { useState, useRef, useEffect } from 'react';
 import { NuanceCanvas, type NuanceCanvasHandle } from './components/NuanceCanvas';
 import { type SoundProfile } from './core/SoundEngine';
+import { type GridType } from './core/geminiInkRenderer';
 import './App.css';
 
 function App() {
@@ -23,6 +24,9 @@ function App() {
   const [toolMode, setToolMode] = useState<'draw' | 'select'>('draw');
   const [selectedCount, setSelectedCount] = useState(0);
   const [multiSelectMode, setMultiSelectMode] = useState(false);
+
+  // v2.1: Grid type selection
+  const [gridType, setGridType] = useState<GridType>('square');
 
   useEffect(() => {
     // Check for embed mode
@@ -91,6 +95,14 @@ function App() {
   ];
   const networkUrl = "http://192.168.1.107:5173";
 
+  const gridOptions: { id: GridType, label: string, icon: string }[] = [
+    { id: 'none', label: 'None', icon: '⬜' },
+    { id: 'square', label: 'Grid', icon: '▦' },
+    { id: 'dot', label: 'Dots', icon: '⁘' },
+    { id: 'ruled', label: 'Ruled', icon: '☰' },
+    { id: 'isometric', label: 'Iso', icon: '△' },
+  ];
+
   const profiles: { id: SoundProfile, label: string, icon: string }[] = [
     { id: 'pencil', label: 'Pencil', icon: '✏️' },
     { id: 'charcoal', label: 'Charcoal', icon: '🌑' },
@@ -113,7 +125,7 @@ function App() {
         pointerEvents: 'none', zIndex: 9999,
         fontFamily: 'monospace'
       }}>
-        v2.0.0
+        v2.1.0
       </div>
       <NuanceCanvas
         ref={canvasRef}
@@ -404,6 +416,24 @@ function App() {
                     title={p.label}
                   >
                     <span className="profile-icon">{p.icon}</span>
+                  </div>
+                ))}
+
+                <div className="dock-divider" />
+
+                {/* Grid Type Selector */}
+                {gridOptions.map(g => (
+                  <div
+                    key={g.id}
+                    className={`grid-chip ${gridType === g.id ? 'active' : ''}`}
+                    onClick={() => {
+                      setGridType(g.id);
+                      canvasRef.current?.setGridType(g.id);
+                    }}
+                    title={g.label}
+                  >
+                    <span className="grid-icon">{g.icon}</span>
+                    <span className="grid-label">{g.label}</span>
                   </div>
                 ))}
               </div>

@@ -26,6 +26,7 @@ interface Stroke {
 }
 
 export type ToolMode = 'draw' | 'select';
+export type GridType = 'none' | 'square' | 'dot' | 'ruled' | 'isometric';
 
 type UndoAction =
     | { type: 'addStroke'; stroke: Stroke }
@@ -86,6 +87,7 @@ export class GeminiInkRenderer {
 
     // v2.0: Selection tool
     private toolMode: ToolMode = 'draw';
+    private gridType: GridType = 'square';
     private selectedIndices: Set<number> = new Set();
     private isDragging: boolean = false;
     private dragStartWorld: { x: number; y: number } | null = null;
@@ -275,6 +277,16 @@ export class GeminiInkRenderer {
 
     public getToolMode(): ToolMode {
         return this.toolMode;
+    }
+
+    // --- GRID TYPE ---
+    public setGridType(type: GridType): void {
+        this.gridType = type;
+        this.requestRedraw();
+    }
+
+    public getGridType(): GridType {
+        return this.gridType;
     }
 
     // --- SELECTION ---
@@ -604,7 +616,8 @@ export class GeminiInkRenderer {
     }
 
     private drawGrid() {
-        // Model: Screen = (World + Pan) * Zoom → World = Screen/Zoom - Pan
+        if (this.gridType === 'none') return;
+
         const zoom = this.camera.zoom;
         const panX = this.camera.x;
         const panY = this.camera.y;
@@ -618,32 +631,100 @@ export class GeminiInkRenderer {
         const gridSize = 40;
 
         this.ctx.save();
-        // CORRECT Order: Scale THEN Translate
         this.ctx.scale(zoom, zoom);
         this.ctx.translate(panX, panY);
 
-        this.ctx.strokeStyle = '#e1e1e1';
-        this.ctx.lineWidth = 1 / zoom; // Keep hairline width regardless of zoom
-
-        this.ctx.beginPath();
-
-        // Vertical Lines
         const startX = Math.floor(worldLeft / gridSize) * gridSize;
         const endX = Math.ceil(worldRight / gridSize) * gridSize;
-        for (let x = startX; x <= endX; x += gridSize) {
-            this.ctx.moveTo(x, worldTop);
-            this.ctx.lineTo(x, worldBottom);
-        }
-
-        // Horizontal Lines
         const startY = Math.floor(worldTop / gridSize) * gridSize;
         const endY = Math.ceil(worldBottom / gridSize) * gridSize;
-        for (let y = startY; y <= endY; y += gridSize) {
-            this.ctx.moveTo(worldLeft, y);
-            this.ctx.lineTo(worldRight, y);
+
+        switch (this.gridType) {
+            case 'square': {
+                this.ctx.strokeStyle = '#e1e1e1';
+                this.ctx.lineWidth = 1 / zoom;
+                this.ctx.beginPath();
+                for (let x = startX; x <= endX; x += gridSize) {
+                    this.ctx.moveTo(x, worldTop);
+                    this.ctx.lineTo(x, worldBottom);
+                }
+                for (let y = startY; y <= endY; y += gridSize) {
+                    this.ctx.moveTo(worldLeft, y);
+                    this.ctx.lineTo(worldRight, y);
+                }
+                this.ctx.stroke();
+                break;
+            }
+
+            case 'dot': {
+                this.ctx.fillStyle = '#c8c8c8';
+                const dotRadius = 1.5 / zoom;
+                for (let x = startX; x <= endX; x += gridSize) {
+                    for (let y = startY; y <= endY; y += gridSize) {
+                        this.ctx.beginPath();
+                        this.ctx.arc(x, y, dotRadius, 0, Math.PI * 2);
+                        this.ctx.fill();
+                    }
+                }
+                break;
+            }
+
+            case 'ruled': {
+                this.ctx.strokeStyle = '#d4d8e0';
+                this.ctx.lineWidth = 1 / zoom;
+                this.ctx.beginPath();
+                for (let y = startY; y <= endY; y += gridSize) {
+                    this.ctx.moveTo(worldLeft, y);
+                    this.ctx.lineTo(worldRight, y);
+                }
+                this.ctx.stroke();
+                // Optional: red margin line
+                const marginX = startX + gridSize * 2;
+                if (marginX >= worldLeft && marginX <= worldRight) {
+                    this.ctx.strokeStyle = 'rgba(220, 80, 80, 0.3)';
+                    this.ctx.beginPath();
+                    this.ctx.moveTo(marginX, worldTop);
+                    this.ctx.lineTo(marginX, worldBottom);
+                    this.ctx.stroke();
+                }
+                break;
+            }
+
+            case 'isometric': {
+                this.ctx.strokeStyle = '#e1e1e1';
+                this.ctx.lineWidth = 1 / zoom;
+                const isoH = gridSize * Math.sqrt(3) / 2; // height of equilateral triangle row
+
+                this.ctx.beginPath();
+                // Horizontal lines
+                const isoStartY = Math.floor(worldTop / isoH) * isoH;
+                const isoEndY = Math.ceil(worldBottom / isoH) * isoH;
+                for (let y = isoStartY; y <= isoEndY; y += isoH) {
+                    this.ctx.moveTo(worldLeft, y);
+                    this.ctx.lineTo(worldRight, y);
+                }
+
+                // Diagonal lines (/) and (\)
+                const rowCount = Math.ceil((worldBottom - worldTop) / isoH) + 2;
+                const colCount = Math.ceil((worldRight - worldLeft) / gridSize) + 2;
+                const baseX = Math.floor(worldLeft / gridSize) * gridSize;
+                const baseY = Math.floor(worldTop / isoH) * isoH;
+
+                for (let c = -rowCount; c <= colCount + rowCount; c++) {
+                    // Lines going from top-left to bottom-right (\)
+                    const x1 = baseX + c * gridSize;
+                    this.ctx.moveTo(x1, baseY);
+                    this.ctx.lineTo(x1 + rowCount * gridSize * 0.5, baseY + rowCount * isoH);
+
+                    // Lines going from top-right to bottom-left (/)
+                    this.ctx.moveTo(x1, baseY);
+                    this.ctx.lineTo(x1 - rowCount * gridSize * 0.5, baseY + rowCount * isoH);
+                }
+                this.ctx.stroke();
+                break;
+            }
         }
 
-        this.ctx.stroke();
         this.ctx.restore();
     }
 
