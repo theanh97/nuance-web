@@ -106,7 +106,7 @@ export class GeminiInkRenderer {
 
     // v2.4: Shape snap - hold still to snap stroke to perfect shape
     private lastMoveTimestamp: number = 0;
-    private shapeSnapThreshold: number = 350; // ms of holding still to trigger snap
+    private shapeSnapThreshold: number = 250; // ms of holding still to trigger snap
 
     constructor(canvas: HTMLCanvasElement, config: Partial<RenderConfig> = {}) {
         this.canvas = canvas;
@@ -242,6 +242,12 @@ export class GeminiInkRenderer {
     public setSoundVolume(volume: number) {
         if (this.soundEngine && this.soundEngine.setVolume) {
             this.soundEngine.setVolume(volume);
+        }
+    }
+
+    public updatePalm(velocity: number) {
+        if (this.soundEngine && this.soundEngine.updatePalm) {
+            this.soundEngine.updatePalm(velocity);
         }
     }
 
@@ -1228,7 +1234,30 @@ export class GeminiInkRenderer {
 
     // --- SHAPE SNAP v2.4 ---
 
-    private detectAndSnapShape(points: Point[]): Point[] | null {
+    private filterHoldPoints(points: Point[]): Point[] {
+        // Remove clustered hold-still points from the end of the stroke.
+        // When the user holds the pen still to trigger shape snap, many points
+        // accumulate at the endpoint, skewing centroid and variance calculations.
+        if (points.length < 8) return points;
+        const last = points[points.length - 1];
+        const clusterRadius = 4; // px — points within this radius of the last point are "hold" points
+        let cutoff = points.length;
+        // Walk backwards from the end, find where points stop clustering
+        for (let i = points.length - 2; i >= Math.floor(points.length * 0.5); i--) {
+            const d = Math.hypot(points[i].x - last.x, points[i].y - last.y);
+            if (d > clusterRadius) {
+                cutoff = i + 2; // Keep one point past the cluster boundary
+                break;
+            }
+        }
+        return cutoff < points.length ? points.slice(0, cutoff) : points;
+    }
+
+    private detectAndSnapShape(rawPoints: Point[]): Point[] | null {
+        if (rawPoints.length < 4) return null;
+
+        // Filter out hold-still points clustered at the end
+        const points = this.filterHoldPoints(rawPoints);
         if (points.length < 4) return null;
 
         // Calculate bounding box
@@ -1250,7 +1279,7 @@ export class GeminiInkRenderer {
         const first = points[0];
         const last = points[points.length - 1];
         const closeDist = Math.hypot(last.x - first.x, last.y - first.y);
-        const isClosed = closeDist < bboxDiag * 0.25;
+        const isClosed = closeDist < bboxDiag * 0.35;
 
         // Calculate centroid
         let cx = 0, cy = 0;
@@ -1259,12 +1288,12 @@ export class GeminiInkRenderer {
         cy /= points.length;
 
         // Average pressure/tilt from original points
-        const avgPressure = points.reduce((s, p) => s + p.pressure, 0) / points.length;
-        const avgTiltX = points.reduce((s, p) => s + p.tiltX, 0) / points.length;
-        const avgTiltY = points.reduce((s, p) => s + p.tiltY, 0) / points.length;
+        const avgPressure = rawPoints.reduce((s, p) => s + p.pressure, 0) / rawPoints.length;
+        const avgTiltX = rawPoints.reduce((s, p) => s + p.tiltX, 0) / rawPoints.length;
+        const avgTiltY = rawPoints.reduce((s, p) => s + p.tiltY, 0) / rawPoints.length;
 
         if (isClosed) {
-            // --- CLOSED SHAPES: Circle or Rectangle ---
+            // --- CLOSED SHAPES: Circle, Ellipse, or Rectangle ---
 
             // Test for circle: check variance of distance from centroid
             const distances = points.map(p => Math.hypot(p.x - cx, p.y - cy));
@@ -1273,24 +1302,44 @@ export class GeminiInkRenderer {
             const stdDev = Math.sqrt(variance);
             const circleScore = stdDev / avgRadius; // Lower = more circular
 
+            // Test for ellipse: check how well points fit an axis-aligned ellipse
+            const rx = bboxW / 2;
+            const ry = bboxH / 2;
+            const ellipseScore = this.scoreEllipse(points, cx, cy, rx, ry);
+
             // Test for rectangle: check how well corners are defined
             const rectScore = this.scoreRectangle(points, minX, minY, maxX, maxY);
 
-            if (circleScore < 0.15) {
+            // Aspect ratio — close to 1 means circle-like, far from 1 means oval
+            const aspect = Math.max(bboxW, bboxH) / Math.max(1, Math.min(bboxW, bboxH));
+
+            console.log(`[ShapeSnap] circle=${circleScore.toFixed(3)} ellipse=${ellipseScore.toFixed(3)} rect=${rectScore.toFixed(3)} aspect=${aspect.toFixed(2)}`);
+
+            if (circleScore < 0.22 && aspect < 1.4) {
                 // Snap to circle
                 return this.generateCirclePoints(cx, cy, avgRadius, avgPressure, avgTiltX, avgTiltY);
             } else if (rectScore > 0.7) {
-                // Snap to rectangle
-                return this.generateRectPoints(minX, minY, maxX, maxY, avgPressure, avgTiltX, avgTiltY);
-            } else if (circleScore < 0.25) {
-                // Looser circle match (ellipse-ish strokes)
-                return this.generateCirclePoints(cx, cy, avgRadius, avgPressure, avgTiltX, avgTiltY);
+                // Strong rectangle match → rounded rectangle
+                return this.generateRoundedRectPoints(minX, minY, maxX, maxY, avgPressure, avgTiltX, avgTiltY);
+            } else if (ellipseScore < 0.20 && aspect >= 1.4) {
+                // Ellipse / oval (non-circular aspect ratio)
+                return this.generateEllipsePoints(cx, cy, rx, ry, avgPressure, avgTiltX, avgTiltY);
+            } else if (circleScore < 0.38) {
+                // Looser circle/ellipse — pick based on aspect ratio
+                if (aspect < 1.5) {
+                    return this.generateCirclePoints(cx, cy, avgRadius, avgPressure, avgTiltX, avgTiltY);
+                } else {
+                    return this.generateEllipsePoints(cx, cy, rx, ry, avgPressure, avgTiltX, avgTiltY);
+                }
             } else if (rectScore > 0.5) {
-                // Looser rectangle match
-                return this.generateRectPoints(minX, minY, maxX, maxY, avgPressure, avgTiltX, avgTiltY);
+                // Looser rectangle match → rounded rectangle
+                return this.generateRoundedRectPoints(minX, minY, maxX, maxY, avgPressure, avgTiltX, avgTiltY);
+            } else if (ellipseScore < 0.35) {
+                // Fallback: loose ellipse
+                return this.generateEllipsePoints(cx, cy, rx, ry, avgPressure, avgTiltX, avgTiltY);
             }
         } else {
-            // --- OPEN SHAPES: Line or Arrow ---
+            // --- OPEN SHAPES: Line ---
 
             // Test for straight line: deviation from first-to-last line
             const lineLen = Math.hypot(last.x - first.x, last.y - first.y);
@@ -1303,7 +1352,7 @@ export class GeminiInkRenderer {
             }
             const lineScore = maxDeviation / lineLen; // Lower = straighter
 
-            if (lineScore < 0.08) {
+            if (lineScore < 0.10) {
                 // Snap to straight line
                 return this.generateLinePoints(first.x, first.y, last.x, last.y, avgPressure, avgTiltX, avgTiltY);
             }
@@ -1377,6 +1426,96 @@ export class GeminiInkRenderer {
                 });
             }
         }
+        return result;
+    }
+
+    private scoreEllipse(points: Point[], cx: number, cy: number, rx: number, ry: number): number {
+        // RMS deviation from an axis-aligned ellipse: (x-cx)²/rx² + (y-cy)²/ry² = 1
+        // Score = average |ellipseEq - 1|. Lower = better fit.
+        if (rx < 5 || ry < 5) return 999;
+        let totalDev = 0;
+        for (const p of points) {
+            const ex = ((p.x - cx) / rx) ** 2 + ((p.y - cy) / ry) ** 2;
+            totalDev += Math.abs(ex - 1);
+        }
+        return totalDev / points.length;
+    }
+
+    private generateEllipsePoints(cx: number, cy: number, rx: number, ry: number, pressure: number, tiltX: number, tiltY: number): Point[] {
+        const numPoints = 64;
+        const result: Point[] = [];
+        const baseTime = performance.now();
+        for (let i = 0; i <= numPoints; i++) {
+            const angle = (i / numPoints) * Math.PI * 2;
+            result.push({
+                x: cx + rx * Math.cos(angle),
+                y: cy + ry * Math.sin(angle),
+                pressure,
+                timestamp: baseTime + i,
+                tiltX, tiltY
+            });
+        }
+        return result;
+    }
+
+    private generateRoundedRectPoints(minX: number, minY: number, maxX: number, maxY: number, pressure: number, tiltX: number, tiltY: number): Point[] {
+        const result: Point[] = [];
+        const baseTime = performance.now();
+        const w = maxX - minX;
+        const h = maxY - minY;
+        // Corner radius: 12% of shorter side, clamped to reasonable range
+        const r = Math.min(Math.min(w, h) * 0.12, 20);
+        const arcSteps = 8; // Points per quarter-circle arc
+        let t = 0;
+
+        const addPoint = (x: number, y: number) => {
+            result.push({ x, y, pressure, timestamp: baseTime + t++, tiltX, tiltY });
+        };
+
+        // Top edge (left-to-right)
+        const segSteps = (len: number) => Math.max(4, Math.ceil(len / 5));
+        const topLen = w - 2 * r;
+        for (let i = 0; i <= segSteps(topLen); i++) {
+            addPoint(minX + r + (topLen * i / segSteps(topLen)), minY);
+        }
+        // Top-right arc
+        for (let i = 1; i <= arcSteps; i++) {
+            const angle = -Math.PI / 2 + (Math.PI / 2) * (i / arcSteps);
+            addPoint(maxX - r + r * Math.cos(angle), minY + r + r * Math.sin(angle));
+        }
+        // Right edge (top-to-bottom)
+        const rightLen = h - 2 * r;
+        for (let i = 1; i <= segSteps(rightLen); i++) {
+            addPoint(maxX, minY + r + (rightLen * i / segSteps(rightLen)));
+        }
+        // Bottom-right arc
+        for (let i = 1; i <= arcSteps; i++) {
+            const angle = 0 + (Math.PI / 2) * (i / arcSteps);
+            addPoint(maxX - r + r * Math.cos(angle), maxY - r + r * Math.sin(angle));
+        }
+        // Bottom edge (right-to-left)
+        const bottomLen = w - 2 * r;
+        for (let i = 1; i <= segSteps(bottomLen); i++) {
+            addPoint(maxX - r - (bottomLen * i / segSteps(bottomLen)), maxY);
+        }
+        // Bottom-left arc
+        for (let i = 1; i <= arcSteps; i++) {
+            const angle = Math.PI / 2 + (Math.PI / 2) * (i / arcSteps);
+            addPoint(minX + r + r * Math.cos(angle), maxY - r + r * Math.sin(angle));
+        }
+        // Left edge (bottom-to-top)
+        const leftLen = h - 2 * r;
+        for (let i = 1; i <= segSteps(leftLen); i++) {
+            addPoint(minX, maxY - r - (leftLen * i / segSteps(leftLen)));
+        }
+        // Top-left arc
+        for (let i = 1; i <= arcSteps; i++) {
+            const angle = Math.PI + (Math.PI / 2) * (i / arcSteps);
+            addPoint(minX + r + r * Math.cos(angle), minY + r + r * Math.sin(angle));
+        }
+        // Close — connect back to start
+        addPoint(minX + r, minY);
+
         return result;
     }
 

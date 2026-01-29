@@ -195,7 +195,7 @@ function App() {
         pointerEvents: 'none', zIndex: 9999,
         fontFamily: 'monospace'
       }}>
-        v2.6.0
+        v2.6.1
       </div>
       <NuanceCanvas
         ref={canvasRef}
