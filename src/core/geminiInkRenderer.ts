@@ -25,6 +25,14 @@ interface Stroke {
     config: RenderConfig;
 }
 
+export type ToolMode = 'draw' | 'select';
+
+type UndoAction =
+    | { type: 'addStroke'; stroke: Stroke }
+    | { type: 'delete'; deletedStrokes: { index: number; stroke: Stroke }[] }
+    | { type: 'recolor'; oldConfigs: { index: number; oldColor: string }[]; newColor: string }
+    | { type: 'move'; indices: number[]; dx: number; dy: number };
+
 export interface RenderConfig {
     baseStrokeWidth: number;
     minWidth: number;
@@ -60,7 +68,7 @@ export class GeminiInkRenderer {
     private points: Point[] = [];
     private isDrawing: boolean = false;
     private strokes: Stroke[] = [];
-    private redoStack: Stroke[] = []; // For undo/redo
+    // redoStack removed - replaced by undoStack/redoActionStack in v2.0
 
     private camera = { x: 0, y: 0, zoom: 1 };
     private readonly dpr: number = window.devicePixelRatio || 1;
@@ -70,12 +78,20 @@ export class GeminiInkRenderer {
 
     // MOTION PREDICTION v1.7.5: Reduce perceived latency
     private velocityHistory: { vx: number; vy: number; timestamp: number }[] = [];
-    private predictionEnabled: boolean = true;
+    private predictionEnabled: boolean = false; // DISABLED: caused stray strokes
     private predictionLookahead: number = 25; // ms to predict ahead
 
     // RAW MODE v1.7.6: Bypass ALL processing for latency testing
-    // When enabled: No friction, no streamline, no prediction - pure 1:1 input
     private rawModeEnabled: boolean = false;
+
+    // v2.0: Selection tool
+    private toolMode: ToolMode = 'draw';
+    private selectedIndices: Set<number> = new Set();
+    private isDragging: boolean = false;
+    private dragStartWorld: { x: number; y: number } | null = null;
+    private dragCurrentWorld: { x: number; y: number } | null = null;
+    private undoStack: UndoAction[] = [];
+    private redoActionStack: UndoAction[] = [];
 
     constructor(canvas: HTMLCanvasElement, config: Partial<RenderConfig> = {}) {
         this.canvas = canvas;
@@ -249,41 +265,307 @@ export class GeminiInkRenderer {
         return this.rawModeEnabled;
     }
 
-    // --- UNDO / REDO ---
-    public undo(): boolean {
-        if (this.strokes.length === 0) return false;
-        const stroke = this.strokes.pop();
-        if (stroke) {
-            this.redoStack.push(stroke);
-            this.requestRedraw();
-            return true;
+    // --- TOOL MODE ---
+    public setToolMode(mode: ToolMode): void {
+        this.toolMode = mode;
+        if (mode === 'draw') {
+            this.clearSelection();
+        }
+    }
+
+    public getToolMode(): ToolMode {
+        return this.toolMode;
+    }
+
+    // --- SELECTION ---
+    public clearSelection(): void {
+        this.selectedIndices.clear();
+        this.isDragging = false;
+        this.dragStartWorld = null;
+        this.dragCurrentWorld = null;
+        this.requestRedraw();
+    }
+
+    public getSelectedCount(): number {
+        return this.selectedIndices.size;
+    }
+
+    public getSelectedIndices(): Set<number> {
+        return this.selectedIndices;
+    }
+
+    public hitTestStroke(screenX: number, screenY: number): number {
+        const world = this.screenToWorld(screenX, screenY);
+        const hitRadius = 12 / this.camera.zoom;
+
+        for (let i = this.strokes.length - 1; i >= 0; i--) {
+            if (this.isPointNearStroke(world.x, world.y, this.strokes[i], hitRadius)) {
+                return i;
+            }
+        }
+        return -1;
+    }
+
+    private isPointNearStroke(wx: number, wy: number, stroke: Stroke, hitRadius: number): boolean {
+        const points = stroke.points;
+        if (points.length === 0) return false;
+
+        // Bounding box pre-filter
+        let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+        for (const p of points) {
+            if (p.x < minX) minX = p.x;
+            if (p.y < minY) minY = p.y;
+            if (p.x > maxX) maxX = p.x;
+            if (p.y > maxY) maxY = p.y;
+        }
+        const margin = hitRadius + stroke.config.baseStrokeWidth;
+        if (wx < minX - margin || wx > maxX + margin || wy < minY - margin || wy > maxY + margin) {
+            return false;
+        }
+
+        if (points.length === 1) {
+            const dx = wx - points[0].x;
+            const dy = wy - points[0].y;
+            return (dx * dx + dy * dy) <= hitRadius * hitRadius;
+        }
+
+        const strokeHalf = stroke.config.baseStrokeWidth / 2;
+        for (let j = 0; j < points.length - 1; j++) {
+            if (this.pointToSegmentDist(wx, wy, points[j].x, points[j].y, points[j + 1].x, points[j + 1].y) <= hitRadius + strokeHalf) {
+                return true;
+            }
         }
         return false;
+    }
+
+    private pointToSegmentDist(px: number, py: number, ax: number, ay: number, bx: number, by: number): number {
+        const abx = bx - ax, aby = by - ay;
+        const apx = px - ax, apy = py - ay;
+        const ab2 = abx * abx + aby * aby;
+        if (ab2 === 0) return Math.sqrt(apx * apx + apy * apy);
+        let t = (apx * abx + apy * aby) / ab2;
+        t = Math.max(0, Math.min(1, t));
+        const cx = ax + t * abx - px;
+        const cy = ay + t * aby - py;
+        return Math.sqrt(cx * cx + cy * cy);
+    }
+
+    public selectStroke(screenX: number, screenY: number, addToSelection: boolean): boolean {
+        const index = this.hitTestStroke(screenX, screenY);
+        if (index === -1) {
+            if (!addToSelection) this.clearSelection();
+            return false;
+        }
+        if (addToSelection) {
+            if (this.selectedIndices.has(index)) {
+                this.selectedIndices.delete(index);
+            } else {
+                this.selectedIndices.add(index);
+            }
+        } else {
+            this.selectedIndices.clear();
+            this.selectedIndices.add(index);
+        }
+        this.requestRedraw();
+        return true;
+    }
+
+    // --- SELECTION ACTIONS ---
+    public deleteSelected(): boolean {
+        if (this.selectedIndices.size === 0) return false;
+        const indices = Array.from(this.selectedIndices).sort((a, b) => b - a);
+        const deletedStrokes: { index: number; stroke: Stroke }[] = [];
+        for (const idx of indices) {
+            deletedStrokes.push({ index: idx, stroke: this.strokes[idx] });
+            this.strokes.splice(idx, 1);
+        }
+        this.pushUndoAction({ type: 'delete', deletedStrokes });
+        this.clearSelection();
+        return true;
+    }
+
+    public changeSelectedColor(newColor: string): boolean {
+        if (this.selectedIndices.size === 0) return false;
+        const oldConfigs: { index: number; oldColor: string }[] = [];
+        for (const idx of this.selectedIndices) {
+            oldConfigs.push({ index: idx, oldColor: this.strokes[idx].config.color });
+            this.strokes[idx].config = { ...this.strokes[idx].config, color: newColor };
+        }
+        this.pushUndoAction({ type: 'recolor', oldConfigs, newColor });
+        this.requestRedraw();
+        return true;
+    }
+
+    public startMoveSelected(screenX: number, screenY: number): void {
+        if (this.selectedIndices.size === 0) return;
+        const world = this.screenToWorld(screenX, screenY);
+        this.isDragging = true;
+        this.dragStartWorld = { x: world.x, y: world.y };
+        this.dragCurrentWorld = { x: world.x, y: world.y };
+    }
+
+    public updateMoveSelected(screenX: number, screenY: number): void {
+        if (!this.isDragging || !this.dragCurrentWorld) return;
+        const world = this.screenToWorld(screenX, screenY);
+        const dx = world.x - this.dragCurrentWorld.x;
+        const dy = world.y - this.dragCurrentWorld.y;
+        for (const idx of this.selectedIndices) {
+            for (const p of this.strokes[idx].points) {
+                p.x += dx;
+                p.y += dy;
+            }
+        }
+        this.dragCurrentWorld = { x: world.x, y: world.y };
+        this.requestRedraw();
+    }
+
+    public endMoveSelected(): void {
+        if (!this.isDragging || !this.dragStartWorld || !this.dragCurrentWorld) return;
+        const totalDx = this.dragCurrentWorld.x - this.dragStartWorld.x;
+        const totalDy = this.dragCurrentWorld.y - this.dragStartWorld.y;
+        if (Math.abs(totalDx) > 0.5 || Math.abs(totalDy) > 0.5) {
+            this.pushUndoAction({
+                type: 'move',
+                indices: Array.from(this.selectedIndices),
+                dx: totalDx,
+                dy: totalDy,
+            });
+        }
+        this.isDragging = false;
+        this.dragStartWorld = null;
+        this.dragCurrentWorld = null;
+    }
+
+    // --- SELECTION HIGHLIGHT RENDERING ---
+    private renderSelectionHighlight(stroke: Stroke): void {
+        const points = stroke.points;
+        if (points.length === 0) return;
+        this.ctx.save();
+        this.ctx.strokeStyle = '#007AFF';
+        this.ctx.lineWidth = (stroke.config.baseStrokeWidth + 6) / this.camera.zoom;
+        this.ctx.globalAlpha = 0.3;
+        this.ctx.lineCap = 'round';
+        this.ctx.lineJoin = 'round';
+        this.ctx.setLineDash([8 / this.camera.zoom, 6 / this.camera.zoom]);
+        this.ctx.beginPath();
+        if (points.length === 1) {
+            this.ctx.arc(points[0].x, points[0].y, stroke.config.baseStrokeWidth + 4, 0, Math.PI * 2);
+        } else {
+            this.ctx.moveTo(points[0].x, points[0].y);
+            for (let i = 1; i < points.length; i++) {
+                this.ctx.lineTo(points[i].x, points[i].y);
+            }
+        }
+        this.ctx.stroke();
+        this.ctx.setLineDash([]);
+        this.ctx.restore();
+    }
+
+    // --- UNDO / REDO (Action-based) ---
+    private pushUndoAction(action: UndoAction): void {
+        this.undoStack.push(action);
+        this.redoActionStack = [];
+    }
+
+    public undo(): boolean {
+        if (this.undoStack.length === 0) return false;
+        const action = this.undoStack.pop()!;
+        switch (action.type) {
+            case 'addStroke': {
+                this.strokes.pop();
+                this.redoActionStack.push(action);
+                break;
+            }
+            case 'delete': {
+                const sorted = [...action.deletedStrokes].sort((a, b) => a.index - b.index);
+                for (const { index, stroke } of sorted) {
+                    this.strokes.splice(index, 0, stroke);
+                }
+                this.redoActionStack.push(action);
+                break;
+            }
+            case 'recolor': {
+                for (const { index, oldColor } of action.oldConfigs) {
+                    if (this.strokes[index]) {
+                        this.strokes[index].config = { ...this.strokes[index].config, color: oldColor };
+                    }
+                }
+                this.redoActionStack.push(action);
+                break;
+            }
+            case 'move': {
+                for (const idx of action.indices) {
+                    if (this.strokes[idx]) {
+                        for (const p of this.strokes[idx].points) {
+                            p.x -= action.dx;
+                            p.y -= action.dy;
+                        }
+                    }
+                }
+                this.redoActionStack.push(action);
+                break;
+            }
+        }
+        this.requestRedraw();
+        return true;
     }
 
     public redo(): boolean {
-        if (this.redoStack.length === 0) return false;
-        const stroke = this.redoStack.pop();
-        if (stroke) {
-            this.strokes.push(stroke);
-            this.requestRedraw();
-            return true;
+        if (this.redoActionStack.length === 0) return false;
+        const action = this.redoActionStack.pop()!;
+        switch (action.type) {
+            case 'addStroke': {
+                this.strokes.push(action.stroke);
+                this.undoStack.push(action);
+                break;
+            }
+            case 'delete': {
+                const indices = action.deletedStrokes.map(d => d.index).sort((a, b) => b - a);
+                for (const idx of indices) {
+                    this.strokes.splice(idx, 1);
+                }
+                this.undoStack.push(action);
+                break;
+            }
+            case 'recolor': {
+                for (const { index } of action.oldConfigs) {
+                    if (this.strokes[index]) {
+                        this.strokes[index].config = { ...this.strokes[index].config, color: action.newColor };
+                    }
+                }
+                this.undoStack.push(action);
+                break;
+            }
+            case 'move': {
+                for (const idx of action.indices) {
+                    if (this.strokes[idx]) {
+                        for (const p of this.strokes[idx].points) {
+                            p.x += action.dx;
+                            p.y += action.dy;
+                        }
+                    }
+                }
+                this.undoStack.push(action);
+                break;
+            }
         }
-        return false;
+        this.requestRedraw();
+        return true;
     }
 
     public canUndo(): boolean {
-        return this.strokes.length > 0;
+        return this.undoStack.length > 0;
     }
 
     public canRedo(): boolean {
-        return this.redoStack.length > 0;
+        return this.redoActionStack.length > 0;
     }
 
     public clearAll(): void {
         this.strokes = [];
-        this.redoStack = [];
-        this.requestRedraw();
+        this.undoStack = [];
+        this.redoActionStack = [];
+        this.clearSelection();
     }
 
     private requestRedraw() {
@@ -306,9 +588,12 @@ export class GeminiInkRenderer {
         this.ctx.scale(this.camera.zoom, this.camera.zoom);
         this.ctx.translate(this.camera.x, this.camera.y);
 
-        // Draw Strokes
-        this.strokes.forEach(stroke => {
+        // Draw Strokes + selection highlights
+        this.strokes.forEach((stroke, index) => {
             this.renderStroke(stroke.points, stroke.config);
+            if (this.selectedIndices.has(index)) {
+                this.renderSelectionHighlight(stroke);
+            }
         });
 
         if (this.points.length > 0) {
@@ -629,8 +914,9 @@ export class GeminiInkRenderer {
         // v1.8.3: REMOVED post-stroke smoothing - was causing "mushy" feel
         // Streamline during drawing is sufficient for smooth strokes
         // Premium pen experience = pen does exactly what user intends
-        this.strokes.push({ points: [...this.points], config: { ...this.config } });
-        this.redoStack = []; // Clear redo stack when new stroke is added
+        const newStroke: Stroke = { points: [...this.points], config: { ...this.config } };
+        this.strokes.push(newStroke);
+        this.pushUndoAction({ type: 'addStroke', stroke: newStroke });
         this.points = [];
 
         // Apply pending resize if there was one during stroke

@@ -13,12 +13,16 @@ function App() {
   const [hapticEnabled, setHapticEnabled] = useState(false); // Default OFF
 
   // v1.8.0: Unified Surface Feel (replaces smoothing + friction)
-  // 0 = Glass (smooth, silent, slippery)
-  // 1 = Stone (rough, scratchy, high friction)
-  const [surfaceTexture, setSurfaceTexture] = useState(0.4); // Default: Slightly smooth (paper-like)
+  const [surfaceTexture, setSurfaceTexture] = useState(0.4);
   const [isEmbedMode, setIsEmbedMode] = useState(false);
-  const [toolbarExpanded, setToolbarExpanded] = useState(true); // Collapsible toolbar
-  const [rawMode, setRawMode] = useState(false); // RAW MODE v1.7.6 - bypass all processing
+  const [toolbarExpanded, setToolbarExpanded] = useState(true);
+  const [rawMode, setRawMode] = useState(false);
+
+  // v2.0: Color picker + Selection tool
+  const [showColorPicker, setShowColorPicker] = useState(false);
+  const [toolMode, setToolMode] = useState<'draw' | 'select'>('draw');
+  const [selectedCount, setSelectedCount] = useState(0);
+  const [multiSelectMode, setMultiSelectMode] = useState(false);
 
   useEffect(() => {
     // Check for embed mode
@@ -76,8 +80,15 @@ function App() {
     }
   };
 
-  const sizes = [4, 8, 12, 16]; // Compact set
-  const colors = ['#333333', '#0055cc', '#cc3300', '#009944', '#663399', '#ffffff']; // Charcoal, Blue, Red, Green, Purple, Eraser(White)
+  const sizes = [4, 8, 12, 16];
+  const primaryColors = ['#333333', '#0055cc', '#cc3300', '#009944', '#663399', '#ffffff'];
+  const extendedColors = [
+    '#000000', '#333333', '#666666', '#999999', '#cccccc', '#ffffff',
+    '#cc3300', '#ff6600', '#ff9900', '#ffcc00', '#ff3366', '#cc0066',
+    '#0055cc', '#0099ff', '#00ccff', '#663399', '#9933cc', '#3366ff',
+    '#009944', '#33cc33', '#66ff66', '#006633', '#339966', '#00cc99',
+    '#8B4513', '#D2691E', '#DEB887', '#FFB6C1', '#E6E6FA', '#F0E68C',
+  ];
   const networkUrl = "http://192.168.1.107:5173";
 
   const profiles: { id: SoundProfile, label: string, icon: string }[] = [
@@ -93,6 +104,17 @@ function App() {
 
   return (
     <div style={{ width: '100vw', height: '100vh', overflow: 'hidden', position: 'relative' }}>
+      {/* Version Label */}
+      <div style={{
+        position: 'fixed', top: 8, right: 12,
+        background: 'rgba(0,0,0,0.3)', color: 'white',
+        padding: '3px 10px', borderRadius: '12px',
+        fontSize: '10px', fontWeight: 600,
+        pointerEvents: 'none', zIndex: 9999,
+        fontFamily: 'monospace'
+      }}>
+        v2.0.0
+      </div>
       <NuanceCanvas
         ref={canvasRef}
         brushSize={brushSize}
@@ -100,9 +122,11 @@ function App() {
         soundProfile={soundProfile}
         soundVolume={soundVolume}
         strokeColor={strokeColor}
-        smoothing={0.7 - surfaceTexture * 0.5}  // v1.8.0: Derived from texture (Glass=smooth, Stone=raw)
+        smoothing={0.7 - surfaceTexture * 0.5}
         hapticEnabled={hapticEnabled}
-        surfaceTexture={surfaceTexture}  // v1.8.0: Unified surface control
+        surfaceTexture={surfaceTexture}
+        onSelectionChange={(count) => setSelectedCount(count)}
+        multiSelectMode={multiSelectMode}
       />
 
       {/* Network Info - Hidden in Embed Mode */}
@@ -133,11 +157,118 @@ function App() {
             {toolbarExpanded ? '▼' : '▲'}
           </button>
 
+          {/* Color Picker Popup */}
+          {showColorPicker && (
+            <div className="color-picker-popup" onClick={(e) => e.stopPropagation()}>
+              <div className="color-grid">
+                {extendedColors.map(c => (
+                  <div
+                    key={c}
+                    className={`color-swatch ${strokeColor === c ? 'active' : ''}`}
+                    style={{ backgroundColor: c }}
+                    onClick={() => {
+                      setStrokeColor(c);
+                      setShowColorPicker(false);
+                    }}
+                  />
+                ))}
+              </div>
+            </div>
+          )}
+
           {/* Toolbar Content - Collapsible */}
           {toolbarExpanded && (
             <>
-              {/* Row 1: Main Tools (Undo/Redo, Colors, Sizes, Share) */}
+              {/* Selection Actions Bar - Only when strokes selected */}
+              {toolMode === 'select' && selectedCount > 0 && (
+                <div className="dock-row selection-bar">
+                  <span style={{ fontSize: '12px', fontWeight: 600, color: '#007AFF' }}>
+                    {selectedCount} selected
+                  </span>
+
+                  <div className="dock-divider" />
+
+                  {/* Delete Selected */}
+                  <button
+                    className="dock-btn btn-icon"
+                    onClick={() => {
+                      canvasRef.current?.deleteSelected();
+                      setSelectedCount(0);
+                    }}
+                    title="Delete Selected"
+                    style={{ color: '#ff3b30' }}
+                  >
+                    🗑️
+                  </button>
+
+                  {/* Recolor Selected */}
+                  <div style={{ display: 'flex', gap: '4px' }}>
+                    {primaryColors.map(c => (
+                      <div
+                        key={`sel-${c}`}
+                        className="color-swatch"
+                        style={{ backgroundColor: c, width: '22px', height: '22px' }}
+                        onClick={() => {
+                          canvasRef.current?.changeSelectedColor(c);
+                        }}
+                      />
+                    ))}
+                  </div>
+
+                  <div className="dock-divider" />
+
+                  {/* Multi-select toggle */}
+                  <button
+                    className={`dock-btn btn-icon ${multiSelectMode ? 'active' : ''}`}
+                    onClick={() => setMultiSelectMode(!multiSelectMode)}
+                    title={multiSelectMode ? 'Multi-select ON' : 'Multi-select OFF'}
+                    style={{ fontSize: '16px', fontWeight: 700 }}
+                  >
+                    +
+                  </button>
+
+                  {/* Deselect All */}
+                  <button
+                    className="dock-btn btn-icon"
+                    onClick={() => {
+                      canvasRef.current?.clearSelection();
+                      setSelectedCount(0);
+                    }}
+                    title="Deselect All"
+                    style={{ fontSize: '14px' }}
+                  >
+                    ✕
+                  </button>
+                </div>
+              )}
+
+              {/* Row 1: Mode + Tools + Colors + Sizes */}
               <div className="dock-row">
+                {/* Draw/Select Mode Toggle */}
+                <button
+                  className={`dock-btn btn-icon ${toolMode === 'draw' ? 'active' : ''}`}
+                  onClick={() => {
+                    setToolMode('draw');
+                    canvasRef.current?.setToolMode('draw');
+                    setSelectedCount(0);
+                  }}
+                  title="Draw"
+                >
+                  ✏️
+                </button>
+                <button
+                  className={`dock-btn btn-icon ${toolMode === 'select' ? 'active' : ''}`}
+                  onClick={() => {
+                    setToolMode('select');
+                    canvasRef.current?.setToolMode('select');
+                  }}
+                  title="Select"
+                >
+                  👆
+                </button>
+
+                <div className="dock-divider" />
+
                 {/* Undo/Redo */}
                 <button
                   className="dock-btn btn-icon"
@@ -170,9 +301,9 @@ function App() {
 
                 <div className="dock-divider" />
 
-                {/* Colors */}
+                {/* Colors - Primary + More button */}
                 <div style={{ display: 'flex', gap: '6px' }}>
-                  {colors.map(c => (
+                  {primaryColors.map(c => (
                     <div
                       key={c}
                       className={`color-swatch ${strokeColor === c ? 'active' : ''}`}
@@ -180,6 +311,15 @@ function App() {
                       onClick={() => setStrokeColor(c)}
                     />
                   ))}
+                  <div
+                    className={`color-swatch ${showColorPicker ? 'active' : ''}`}
+                    style={{
+                      background: 'conic-gradient(red, yellow, lime, aqua, blue, magenta, red)',
+                      border: showColorPicker ? '2px solid #007AFF' : '2px solid transparent'
+                    }}
+                    onClick={() => setShowColorPicker(!showColorPicker)}
+                    title="More colors"
+                  />
                 </div>
 
                 <div className="dock-divider" />
@@ -215,7 +355,7 @@ function App() {
 
                 <div className="dock-divider" />
 
-                {/* v1.8.0: Unified Surface Feel (replaces Smooth + Paper sliders) */}
+                {/* Surface Feel */}
                 <div className="slider-group" style={{ minWidth: '120px' }}>
                   <div className="slider-label">
                     <span>🧊</span>
@@ -230,7 +370,6 @@ function App() {
                       setSurfaceTexture(newTexture);
                       canvasRef.current?.setSurfaceTexture(newTexture);
                     }}
-                    title={surfaceTexture < 0.3 ? 'Glass - Smooth & Silent' : surfaceTexture > 0.7 ? 'Stone - Rough & Scratchy' : 'Paper - Balanced'}
                   />
                 </div>
 
@@ -242,7 +381,6 @@ function App() {
                   📳
                 </button>
 
-                {/* RAW MODE v1.7.6: Toggle for latency testing */}
                 <button
                   className={`dock-btn btn-icon ${rawMode ? 'active' : ''}`}
                   onClick={() => {
@@ -250,7 +388,6 @@ function App() {
                     setRawMode(newMode);
                     canvasRef.current?.setRawMode(newMode);
                   }}
-                  title={rawMode ? "RAW MODE ON - Pure input" : "RAW MODE OFF - Full processing"}
                   style={rawMode ? { background: '#ff3b30', color: 'white' } : {}}
                 >
                   ⚡

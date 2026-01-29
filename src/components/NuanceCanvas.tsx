@@ -9,8 +9,13 @@ export interface NuanceCanvasHandle {
     canUndo: () => boolean;
     canRedo: () => boolean;
     clearAll: () => void;
-    setRawMode: (enabled: boolean) => void; // RAW MODE v1.7.6
-    setSurfaceTexture: (texture: number) => void; // v1.8.0: Unified surface feel (0=Glass, 1=Stone)
+    setRawMode: (enabled: boolean) => void;
+    setSurfaceTexture: (texture: number) => void;
+    // v2.0: Selection tool
+    setToolMode: (mode: 'draw' | 'select') => void;
+    deleteSelected: () => boolean;
+    changeSelectedColor: (color: string) => boolean;
+    clearSelection: () => void;
 }
 
 interface NuanceCanvasProps {
@@ -19,12 +24,15 @@ interface NuanceCanvasProps {
     soundProfile: SoundProfile;
     soundVolume: number;
     strokeColor: string;
-    smoothing?: number; // 0.0 to 1.0
+    smoothing?: number;
     hapticEnabled?: boolean;
-    surfaceTexture?: number; // v1.8.0: Unified surface feel (0=Glass, 1=Stone)
+    surfaceTexture?: number;
+    // v2.0: Selection tool
+    onSelectionChange?: (count: number) => void;
+    multiSelectMode?: boolean;
 }
 
-export const NuanceCanvas = forwardRef<NuanceCanvasHandle, NuanceCanvasProps>(({ brushSize, penOnly: _penOnly, soundProfile, soundVolume, strokeColor, smoothing, hapticEnabled = false, surfaceTexture = 0.4 }, ref) => {
+export const NuanceCanvas = forwardRef<NuanceCanvasHandle, NuanceCanvasProps>(({ brushSize, penOnly: _penOnly, soundProfile, soundVolume, strokeColor, smoothing, hapticEnabled = false, surfaceTexture = 0.4, onSelectionChange, multiSelectMode = false }, ref) => {
     const canvasRef = useRef<HTMLCanvasElement>(null);
     const rendererRef = useRef<GeminiInkRenderer | null>(null);
 
@@ -73,6 +81,29 @@ export const NuanceCanvas = forwardRef<NuanceCanvasHandle, NuanceCanvasProps>(({
             if (rendererRef.current) {
                 rendererRef.current.setSurfaceTexture(texture);
             }
+        },
+        // v2.0: Selection tool
+        setToolMode: (mode: 'draw' | 'select') => {
+            if (rendererRef.current) {
+                rendererRef.current.setToolMode(mode);
+            }
+        },
+        deleteSelected: () => {
+            if (rendererRef.current) {
+                return rendererRef.current.deleteSelected();
+            }
+            return false;
+        },
+        changeSelectedColor: (color: string) => {
+            if (rendererRef.current) {
+                return rendererRef.current.changeSelectedColor(color);
+            }
+            return false;
+        },
+        clearSelection: () => {
+            if (rendererRef.current) {
+                rendererRef.current.clearSelection();
+            }
         }
     }));
     const containerRef = useRef<HTMLDivElement>(null);
@@ -96,28 +127,6 @@ export const NuanceCanvas = forwardRef<NuanceCanvasHandle, NuanceCanvasProps>(({
             console.error("Renderer Init Failed:", err);
             setErrorMsg(err.message || "Unknown Renderer Error");
         }
-    }, []);
-
-    // IPAD FIX v1.7.7: Prevent Scribble feature from swallowing pointer events
-    // This is a known WebKit bug (https://bugs.webkit.org/show_bug.cgi?id=217430)
-    useEffect(() => {
-        const canvas = canvasRef.current;
-        if (!canvas) return;
-
-        // Add touchmove handler that prevents default - stops Scribble interference
-        const preventScribble = (e: TouchEvent) => {
-            // Only prevent if we're actively drawing with pen
-            if (activeDrawingPointer.current !== null) {
-                e.preventDefault();
-            }
-        };
-
-        // Must use { passive: false } to allow preventDefault
-        canvas.addEventListener('touchmove', preventScribble, { passive: false });
-
-        return () => {
-            canvas.removeEventListener('touchmove', preventScribble);
-        };
     }, []);
 
     // Configuration Update
@@ -161,13 +170,20 @@ export const NuanceCanvas = forwardRef<NuanceCanvasHandle, NuanceCanvasProps>(({
     // --- GESTURE & INPUT HANDLING ---
     const activePointers = useRef<Map<number, { x: number, y: number }>>(new Map());
     const prevDist = useRef<number | null>(null);
+    const prevCenter = useRef<{ x: number, y: number } | null>(null); // 2-finger pan while pinching
     const activeDrawingPointer = useRef<number | null>(null);
 
-    // IPAD FIX v1.7.7: Detect Safari/iOS - they have buggy pointer event handling
-    const isSafari = useRef<boolean>(
-        typeof navigator !== 'undefined' &&
-        /^((?!chrome|android).)*safari/i.test(navigator.userAgent)
-    );
+    // v2.0: Selection mode refs
+    const isSelectDragging = useRef(false);
+    const selectPointerStart = useRef<{ x: number, y: number } | null>(null);
+    const selectPointerId = useRef<number | null>(null);
+
+    // Notify parent of selection count changes
+    const notifySelectionChange = () => {
+        if (onSelectionChange && rendererRef.current) {
+            onSelectionChange(rendererRef.current.getSelectedCount());
+        }
+    };
 
     // Helper: Get canvas-relative coordinates (works on all devices)
     const getCanvasCoords = (e: React.PointerEvent) => {
@@ -184,22 +200,33 @@ export const NuanceCanvas = forwardRef<NuanceCanvasHandle, NuanceCanvasProps>(({
         // Prevent default to avoid browser gesture interference on iPad
         e.preventDefault();
 
-        // 1. PEN/MOUSE: Always Draw
+        // 1. PEN/MOUSE
         if (e.pointerType === 'pen' || e.pointerType === 'mouse') {
-            // IPAD FIX v1.7.6: If there's an orphaned stroke (pointerup was missed),
-            // clean it up before starting new stroke
-            if (activeDrawingPointer.current !== null && activeDrawingPointer.current !== e.pointerId) {
-                console.log('[Canvas] iPad: Cleaning up orphaned stroke from pointer', activeDrawingPointer.current);
-                rendererRef.current?.endStroke();
-                // Don't try to release capture - it may already be gone
-            }
-
-            // Capture this pointer for reliable tracking
             e.currentTarget.setPointerCapture(e.pointerId);
-            activeDrawingPointer.current = e.pointerId;
+
+            const renderer = rendererRef.current;
+            if (!renderer) return;
 
             const { x, y } = getCanvasCoords(e);
-            rendererRef.current?.startStroke(x, y, e.pressure || 0.5, e.tiltX || 0, e.tiltY || 0);
+
+            // Branch: Draw mode vs Select mode
+            if (renderer.getToolMode() === 'select') {
+                // Select mode: record start for tap vs drag detection
+                selectPointerId.current = e.pointerId;
+                selectPointerStart.current = { x, y };
+                isSelectDragging.current = false;
+
+                // If tapping on an already-selected stroke, prepare for drag
+                const hitIndex = renderer.hitTestStroke(x, y);
+                if (hitIndex !== -1 && renderer.getSelectedIndices().has(hitIndex)) {
+                    // Will become drag if pointer moves enough
+                    renderer.startMoveSelected(x, y);
+                }
+            } else {
+                // Draw mode: start stroke as normal
+                activeDrawingPointer.current = e.pointerId;
+                renderer.startStroke(x, y, e.pressure || 0.5, e.tiltX || 0, e.tiltY || 0);
+            }
             return;
         }
 
@@ -211,45 +238,66 @@ export const NuanceCanvas = forwardRef<NuanceCanvasHandle, NuanceCanvasProps>(({
             if (activePointers.current.size === 2) {
                 const points = Array.from(activePointers.current.values());
                 prevDist.current = Math.hypot(points[0].x - points[1].x, points[0].y - points[1].y);
+                prevCenter.current = {
+                    x: (points[0].x + points[1].x) / 2,
+                    y: (points[0].y + points[1].y) / 2
+                };
             }
         }
     };
 
     const handlePointerMove = (e: React.PointerEvent) => {
-        // PEN/MOUSE: Draw - must match the active drawing pointer
-        if ((e.pointerType === 'pen' || e.pointerType === 'mouse') &&
-            activeDrawingPointer.current === e.pointerId) {
-            e.preventDefault();
+        // PEN/MOUSE
+        if (e.pointerType === 'pen' || e.pointerType === 'mouse') {
+            const renderer = rendererRef.current;
+            if (!renderer) return;
 
-            const canvas = canvasRef.current;
-            if (!canvas) return;
-            const rect = canvas.getBoundingClientRect();
+            // Select mode drag
+            if (renderer.getToolMode() === 'select' && selectPointerId.current === e.pointerId) {
+                e.preventDefault();
+                const { x, y } = getCanvasCoords(e);
+                const start = selectPointerStart.current;
 
-            // IPAD FIX v1.7.7: Safari has buggy getCoalescedEvents - skip it entirely
-            // On Safari/iPad, just use the main event directly for reliability
-            if (isSafari.current) {
-                const x = e.clientX - rect.left;
-                const y = e.clientY - rect.top;
-                rendererRef.current?.addPoint(x, y, e.pressure || 0.5, e.tiltX || 0, e.tiltY || 0);
+                if (start) {
+                    const dist = Math.hypot(x - start.x, y - start.y);
+                    // Drag threshold: 5px to distinguish tap from drag
+                    if (dist > 5) {
+                        if (!isSelectDragging.current) {
+                            isSelectDragging.current = true;
+                            // If we haven't prepared a drag yet (tapped empty space then moved), ignore
+                            if (renderer.getSelectedCount() === 0) return;
+                        }
+                        renderer.updateMoveSelected(x, y);
+                    }
+                }
                 return;
             }
 
-            // Chrome/Samsung: Use coalesced events for smoother input
-            const nativeEvent = e.nativeEvent as PointerEvent;
-            const coalescedEvents = nativeEvent.getCoalescedEvents?.() || [];
+            // Draw mode - must match the active drawing pointer
+            if (activeDrawingPointer.current === e.pointerId) {
+                e.preventDefault();
 
-            if (coalescedEvents.length > 0) {
-                for (const pe of coalescedEvents) {
-                    const x = pe.clientX - rect.left;
-                    const y = pe.clientY - rect.top;
-                    rendererRef.current?.addPoint(x, y, pe.pressure || 0.5, pe.tiltX || 0, pe.tiltY || 0);
+                const canvas = canvasRef.current;
+                if (!canvas) return;
+                const rect = canvas.getBoundingClientRect();
+
+                // Use coalesced events for smoother input
+                const nativeEvent = e.nativeEvent as PointerEvent;
+                const coalescedEvents = nativeEvent.getCoalescedEvents?.() || [];
+
+                if (coalescedEvents.length > 0) {
+                    for (const pe of coalescedEvents) {
+                        const x = pe.clientX - rect.left;
+                        const y = pe.clientY - rect.top;
+                        renderer.addPoint(x, y, pe.pressure || 0.5, pe.tiltX || 0, pe.tiltY || 0);
+                    }
+                } else {
+                    const x = e.clientX - rect.left;
+                    const y = e.clientY - rect.top;
+                    renderer.addPoint(x, y, e.pressure || 0.5, e.tiltX || 0, e.tiltY || 0);
                 }
-            } else {
-                const x = e.clientX - rect.left;
-                const y = e.clientY - rect.top;
-                rendererRef.current?.addPoint(x, y, e.pressure || 0.5, e.tiltX || 0, e.tiltY || 0);
+                return;
             }
-            return;
         }
 
         // TOUCH: Gesture
@@ -268,14 +316,16 @@ export const NuanceCanvas = forwardRef<NuanceCanvasHandle, NuanceCanvasProps>(({
                 rendererRef.current?.pan(dx, dy);
             }
             else if (activePointers.current.size === 2) {
-                // 2 Finger Zoom + Pan (Pivot)
+                // 2 Finger Zoom + Pan (Pivot + Translate)
                 const points = Array.from(activePointers.current.values());
                 const curDist = Math.hypot(points[0].x - points[1].x, points[0].y - points[1].y);
+                const centerClientX = (points[0].x + points[1].x) / 2;
+                const centerClientY = (points[0].y + points[1].y) / 2;
 
                 // Convert Client coordinates to Canvas-relative coordinates
                 const rect = e.currentTarget.getBoundingClientRect();
-                const cx = ((points[0].x + points[1].x) / 2) - rect.left;
-                const cy = ((points[0].y + points[1].y) / 2) - rect.top;
+                const cx = centerClientX - rect.left;
+                const cy = centerClientY - rect.top;
 
                 if (prevDist.current) {
                     const scale = curDist / prevDist.current;
@@ -283,29 +333,71 @@ export const NuanceCanvas = forwardRef<NuanceCanvasHandle, NuanceCanvasProps>(({
                     rendererRef.current?.zoom(safeScale, cx, cy);
                 }
                 prevDist.current = curDist;
+
+                // Pan by midpoint movement (so 2-finger swipe can move the canvas too)
+                if (prevCenter.current) {
+                    rendererRef.current?.pan(
+                        centerClientX - prevCenter.current.x,
+                        centerClientY - prevCenter.current.y
+                    );
+                }
+                prevCenter.current = { x: centerClientX, y: centerClientY };
             }
         }
     };
 
     const handlePointerUp = (e: React.PointerEvent) => {
         if (e.pointerType === 'pen' || e.pointerType === 'mouse') {
+            const renderer = rendererRef.current;
+
+            // Select mode
+            if (renderer?.getToolMode() === 'select' && selectPointerId.current === e.pointerId) {
+                const { x, y } = getCanvasCoords(e);
+
+                if (isSelectDragging.current) {
+                    // End drag-to-move
+                    renderer.endMoveSelected();
+                } else {
+                    // Tap = select/deselect stroke
+                    renderer.selectStroke(x, y, multiSelectMode);
+                }
+
+                selectPointerId.current = null;
+                selectPointerStart.current = null;
+                isSelectDragging.current = false;
+                notifySelectionChange();
+                return;
+            }
+
+            // Draw mode
             if (activeDrawingPointer.current === e.pointerId) {
-                console.log('[Canvas] Pen up:', e.pointerId);
                 activeDrawingPointer.current = null;
                 rendererRef.current?.endStroke();
             }
         } else {
             activePointers.current.delete(e.pointerId);
-            if (activePointers.current.size < 2) prevDist.current = null;
+            if (activePointers.current.size < 2) {
+                prevDist.current = null;
+                prevCenter.current = null;
+            }
         }
     };
 
     // Handle lost pointer capture (important for iPad)
     const handleLostPointerCapture = (e: React.PointerEvent) => {
         if (activeDrawingPointer.current === e.pointerId) {
-            console.log('[Canvas] Lost pointer capture:', e.pointerId);
             activeDrawingPointer.current = null;
             rendererRef.current?.endStroke();
+        }
+        // Also handle select mode lost capture
+        if (selectPointerId.current === e.pointerId) {
+            if (isSelectDragging.current) {
+                rendererRef.current?.endMoveSelected();
+            }
+            selectPointerId.current = null;
+            selectPointerStart.current = null;
+            isSelectDragging.current = false;
+            notifySelectionChange();
         }
     };
 
@@ -352,7 +444,7 @@ export const NuanceCanvas = forwardRef<NuanceCanvasHandle, NuanceCanvasProps>(({
                     position: 'absolute',
                     top: 0, left: 0,
                     width: '100%', height: '100%',
-                    cursor: _penOnly ? 'none' : 'crosshair',
+                    cursor: rendererRef.current?.getToolMode() === 'select' ? 'pointer' : (_penOnly ? 'none' : 'crosshair'),
                     touchAction: 'none', // Critical for Pointer Events
                     WebkitUserSelect: 'none', // iOS Text Selection
                     WebkitTouchCallout: 'none', // iOS Long Press

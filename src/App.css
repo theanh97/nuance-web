@@ -436,3 +436,62 @@ input[type=range]::-webkit-slider-runnable-track {
   background: transparent;
   border-radius: 2px;
 }
+
+/* --- COLOR PICKER POPUP --- */
+.color-picker-popup {
+  position: absolute;
+  bottom: calc(100% + 12px);
+  left: 50%;
+  transform: translateX(-50%);
+  background: rgba(255, 255, 255, 0.92);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  border: 1px solid rgba(255, 255, 255, 0.5);
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.15);
+  border-radius: 16px;
+  padding: 12px;
+  z-index: 1001;
+  animation: popupFadeIn 0.15s ease-out;
+}
+
+@keyframes popupFadeIn {
+  from { opacity: 0; transform: translateX(-50%) translateY(8px); }
+  to { opacity: 1; transform: translateX(-50%) translateY(0); }
+}
+
+.color-grid {
+  display: grid;
+  grid-template-columns: repeat(6, 1fr);
+  gap: 8px;
+}
+
+.color-grid .color-swatch {
+  width: 32px;
+  height: 32px;
+}
+
+/* --- SELECTION ACTION BAR --- */
+.selection-bar {
+  background: rgba(230, 240, 255, 0.85) !important;
+  border: 1px solid rgba(0, 122, 255, 0.2) !important;
+  animation: slideUp 0.15s ease-out;
+}
+
+@keyframes slideUp {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+/* Responsive: smaller popup on phones */
+@media (max-width: 600px) {
+  .color-picker-popup {
+    width: 90vw;
+  }
+  .color-grid {
+    gap: 6px;
+  }
+  .color-grid .color-swatch {
+    width: 28px;
+    height: 28px;
+  }
+}
