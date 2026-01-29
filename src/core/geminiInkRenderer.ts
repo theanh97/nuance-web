@@ -28,6 +28,12 @@ interface Stroke {
 export type ToolMode = 'draw' | 'select';
 export type GridType = 'none' | 'square' | 'dot' | 'ruled' | 'isometric' | 'graph' | 'hex';
 
+export interface SerializedDrawing {
+    version: 1;
+    gridType: GridType;
+    strokes: Stroke[];
+}
+
 type UndoAction =
     | { type: 'addStroke'; stroke: Stroke }
     | { type: 'delete'; deletedStrokes: { index: number; stroke: Stroke }[] }
@@ -129,6 +135,33 @@ export class GeminiInkRenderer {
 
     public updateConfig(newConfig: Partial<RenderConfig>): void {
         this.config = { ...this.config, ...newConfig };
+    }
+
+    public exportStrokes(): SerializedDrawing {
+        return {
+            version: 1,
+            gridType: this.gridType,
+            strokes: this.strokes.map(stroke => ({
+                config: { ...stroke.config },
+                points: stroke.points.map(point => ({ ...point }))
+            }))
+        };
+    }
+
+    public loadStrokes(data: SerializedDrawing): void {
+        if (!data || !Array.isArray(data.strokes)) return;
+        this.strokes = data.strokes.map(stroke => ({
+            config: { ...stroke.config },
+            points: stroke.points.map(point => ({ ...point }))
+        }));
+        this.points = [];
+        this.redoActionStack = [];
+        this.undoStack = [];
+        this.clearSelection();
+        if (data.gridType) {
+            this.gridType = data.gridType;
+        }
+        this.requestRedraw();
     }
 
     // Track pending resize to apply after stroke ends
@@ -754,8 +787,8 @@ export class GeminiInkRenderer {
                     this.ctx.lineTo(worldRight, y);
                 }
                 this.ctx.stroke();
-                // Optional: red margin line
-                const marginX = startX + gridSize * 2;
+                // Red margin line — fixed at world x = gridSize*2
+                const marginX = gridSize * 2;
                 if (marginX >= worldLeft && marginX <= worldRight) {
                     this.ctx.strokeStyle = 'rgba(220, 80, 80, 0.3)';
                     this.ctx.beginPath();
