@@ -56,11 +56,12 @@ function App() {
   };
 
   const path = window.location.pathname;
-  if (path.startsWith('/s/')) {
-    const shareId = path.split('/s/')[1];
-    if (shareId) {
-      return <Player shareId={shareId} />;
-    }
+  const query = new URLSearchParams(window.location.search);
+  const shareIdFromQuery = query.get('s');
+  const shareIdFromPath = path.startsWith('/s/') ? path.split('/s/')[1] : null;
+  const shareId = shareIdFromQuery || shareIdFromPath;
+  if (shareId) {
+    return <Player shareId={shareId} />;
   }
 
   const handleShare = async () => {
@@ -116,7 +117,8 @@ function App() {
     try {
       const drawing = canvasRef.current.exportStrokes();
       if (!drawing) return;
-      const { url } = await createShare(drawing);
+      const thumbnail = await createThumbnail();
+      const { url } = await createShare(drawing, { thumbnail });
 
       if (typeof navigator.share === 'function') {
         await navigator.share({
@@ -136,6 +138,41 @@ function App() {
     } catch (err) {
       alert(`Share failed: ${(err as Error).message}`);
     }
+  };
+
+  const createThumbnail = async (): Promise<string | undefined> => {
+    if (!canvasRef.current) return undefined;
+    const dataUrl = await canvasRef.current.exportImage();
+    if (!dataUrl) return undefined;
+    const img = new Image();
+    img.src = dataUrl;
+    if ('decode' in img) {
+      try {
+        // @ts-expect-error - decode exists in modern browsers
+        await img.decode();
+      } catch {
+        // fallback to onload
+        await new Promise((resolve, reject) => {
+          img.onload = resolve;
+          img.onerror = reject;
+        });
+      }
+    } else {
+      await new Promise((resolve, reject) => {
+        img.onload = resolve;
+        img.onerror = reject;
+      });
+    }
+
+    const maxSize = 640;
+    const scale = Math.min(1, maxSize / Math.max(img.width, img.height));
+    const canvas = document.createElement('canvas');
+    canvas.width = Math.round(img.width * scale);
+    canvas.height = Math.round(img.height * scale);
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return undefined;
+    ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+    return canvas.toDataURL('image/png');
   };
 
   const sizes = [4, 8, 12, 16];
@@ -237,6 +274,11 @@ function App() {
                     onClick={() => {
                       setStrokeColor(c);
                       setShowColorPicker(false);
+                      if (toolMode !== 'draw') {
+                        setToolMode('draw');
+                        canvasRef.current?.setToolMode('draw');
+                        setSelectedCount(0);
+                      }
                     }}
                   />
                 ))}
@@ -387,7 +429,14 @@ function App() {
                       key={c}
                       className={`color-swatch ${strokeColor === c ? 'active' : ''}`}
                       style={{ backgroundColor: c }}
-                      onClick={() => setStrokeColor(c)}
+                      onClick={() => {
+                        setStrokeColor(c);
+                        if (toolMode !== 'draw') {
+                          setToolMode('draw');
+                          canvasRef.current?.setToolMode('draw');
+                          setSelectedCount(0);
+                        }
+                      }}
                     />
                   ))}
                   <div
@@ -409,7 +458,14 @@ function App() {
                     <div
                       key={size}
                       className={`size-dot ${brushSize === size ? 'active' : ''}`}
-                      onClick={() => setBrushSize(size)}
+                      onClick={() => {
+                        setBrushSize(size);
+                        if (toolMode !== 'draw') {
+                          setToolMode('draw');
+                          canvasRef.current?.setToolMode('draw');
+                          setSelectedCount(0);
+                        }
+                      }}
                       style={{
                         width: Math.max(14, size + 8),
                         height: Math.max(14, size + 8),
