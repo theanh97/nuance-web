@@ -85,7 +85,7 @@ function App() {
   };
 
   const sizes = [4, 8, 12, 16];
-  const primaryColors = ['#333333', '#0055cc', '#cc3300', '#009944', '#663399', '#ffffff'];
+  const primaryColors = ['#333333', '#cc3300', '#ff9900', '#009944', '#0055cc', '#ffffff'];
   const extendedColors = [
     '#000000', '#333333', '#666666', '#999999', '#cccccc', '#ffffff',
     '#cc3300', '#ff6600', '#ff9900', '#ffcc00', '#ff3366', '#cc0066',
@@ -125,7 +125,7 @@ function App() {
         pointerEvents: 'none', zIndex: 9999,
         fontFamily: 'monospace'
       }}>
-        v2.1.0
+        v2.2.0
       </div>
       <NuanceCanvas
         ref={canvasRef}

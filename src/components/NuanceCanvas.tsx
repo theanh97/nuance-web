@@ -183,6 +183,7 @@ export const NuanceCanvas = forwardRef<NuanceCanvasHandle, NuanceCanvasProps>(({
 
     // v2.0: Selection mode refs
     const isSelectDragging = useRef(false);
+    const isRectSelecting = useRef(false); // v2.2: rectangle selection vs move
     const selectPointerStart = useRef<{ x: number, y: number } | null>(null);
     const selectPointerId = useRef<number | null>(null);
 
@@ -223,12 +224,15 @@ export const NuanceCanvas = forwardRef<NuanceCanvasHandle, NuanceCanvasProps>(({
                 selectPointerId.current = e.pointerId;
                 selectPointerStart.current = { x, y };
                 isSelectDragging.current = false;
+                isRectSelecting.current = false;
 
-                // If tapping on an already-selected stroke, prepare for drag
+                // If tapping on an already-selected stroke, prepare for move drag
                 const hitIndex = renderer.hitTestStroke(x, y);
                 if (hitIndex !== -1 && renderer.getSelectedIndices().has(hitIndex)) {
-                    // Will become drag if pointer moves enough
                     renderer.startMoveSelected(x, y);
+                } else {
+                    // Will become rectangle selection if pointer moves enough
+                    renderer.startSelectionRect(x, y);
                 }
             } else {
                 // Draw mode: start stroke as normal
@@ -272,10 +276,21 @@ export const NuanceCanvas = forwardRef<NuanceCanvasHandle, NuanceCanvasProps>(({
                     if (dist > 5) {
                         if (!isSelectDragging.current) {
                             isSelectDragging.current = true;
-                            // If we haven't prepared a drag yet (tapped empty space then moved), ignore
-                            if (renderer.getSelectedCount() === 0) return;
+                            // Determine: move drag or rectangle selection
+                            // If pointerDown hit a selected stroke → move; otherwise → rect select
+                            const hitIndex = renderer.hitTestStroke(start.x, start.y);
+                            if (hitIndex !== -1 && renderer.getSelectedIndices().has(hitIndex)) {
+                                isRectSelecting.current = false;
+                            } else {
+                                isRectSelecting.current = true;
+                            }
                         }
-                        renderer.updateMoveSelected(x, y);
+
+                        if (isRectSelecting.current) {
+                            renderer.updateSelectionRect(x, y);
+                        } else {
+                            renderer.updateMoveSelected(x, y);
+                        }
                     }
                 }
                 return;
@@ -363,16 +378,24 @@ export const NuanceCanvas = forwardRef<NuanceCanvasHandle, NuanceCanvasProps>(({
                 const { x, y } = getCanvasCoords(e);
 
                 if (isSelectDragging.current) {
-                    // End drag-to-move
-                    renderer.endMoveSelected();
+                    if (isRectSelecting.current) {
+                        // End rectangle selection
+                        renderer.endSelectionRect(multiSelectMode);
+                    } else {
+                        // End drag-to-move
+                        renderer.endMoveSelected();
+                    }
                 } else {
                     // Tap = select/deselect stroke
+                    // Cancel any started rect that didn't pass threshold
+                    renderer.endSelectionRect(false);
                     renderer.selectStroke(x, y, multiSelectMode);
                 }
 
                 selectPointerId.current = null;
                 selectPointerStart.current = null;
                 isSelectDragging.current = false;
+                isRectSelecting.current = false;
                 notifySelectionChange();
                 return;
             }
@@ -400,11 +423,16 @@ export const NuanceCanvas = forwardRef<NuanceCanvasHandle, NuanceCanvasProps>(({
         // Also handle select mode lost capture
         if (selectPointerId.current === e.pointerId) {
             if (isSelectDragging.current) {
-                rendererRef.current?.endMoveSelected();
+                if (isRectSelecting.current) {
+                    rendererRef.current?.endSelectionRect(multiSelectMode);
+                } else {
+                    rendererRef.current?.endMoveSelected();
+                }
             }
             selectPointerId.current = null;
             selectPointerStart.current = null;
             isSelectDragging.current = false;
+            isRectSelecting.current = false;
             notifySelectionChange();
         }
     };

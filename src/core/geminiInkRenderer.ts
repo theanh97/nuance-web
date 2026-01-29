@@ -95,6 +95,9 @@ export class GeminiInkRenderer {
     private undoStack: UndoAction[] = [];
     private redoActionStack: UndoAction[] = [];
 
+    // v2.2: Rectangle selection
+    private selectionRect: { sx1: number; sy1: number; sx2: number; sy2: number } | null = null;
+
     constructor(canvas: HTMLCanvasElement, config: Partial<RenderConfig> = {}) {
         this.canvas = canvas;
         this.config = { ...DEFAULT_CONFIG, ...config };
@@ -448,6 +451,72 @@ export class GeminiInkRenderer {
         this.dragCurrentWorld = null;
     }
 
+    // --- RECTANGLE SELECTION ---
+    public startSelectionRect(screenX: number, screenY: number): void {
+        this.selectionRect = { sx1: screenX, sy1: screenY, sx2: screenX, sy2: screenY };
+    }
+
+    public updateSelectionRect(screenX: number, screenY: number): void {
+        if (!this.selectionRect) return;
+        this.selectionRect.sx2 = screenX;
+        this.selectionRect.sy2 = screenY;
+        this.requestRedraw();
+    }
+
+    public endSelectionRect(addToSelection: boolean): void {
+        if (!this.selectionRect) return;
+        const rect = this.selectionRect;
+        this.selectionRect = null;
+
+        // Convert screen corners to world coords
+        const w1 = this.screenToWorld(Math.min(rect.sx1, rect.sx2), Math.min(rect.sy1, rect.sy2));
+        const w2 = this.screenToWorld(Math.max(rect.sx1, rect.sx2), Math.max(rect.sy1, rect.sy2));
+
+        if (!addToSelection) {
+            this.selectedIndices.clear();
+        }
+
+        // Select strokes whose bounding box overlaps the rectangle
+        for (let i = 0; i < this.strokes.length; i++) {
+            const stroke = this.strokes[i];
+            if (stroke.points.length === 0) continue;
+
+            let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+            for (const p of stroke.points) {
+                if (p.x < minX) minX = p.x;
+                if (p.y < minY) minY = p.y;
+                if (p.x > maxX) maxX = p.x;
+                if (p.y > maxY) maxY = p.y;
+            }
+
+            // Check bounding box overlap
+            if (maxX >= w1.x && minX <= w2.x && maxY >= w1.y && minY <= w2.y) {
+                this.selectedIndices.add(i);
+            }
+        }
+        this.requestRedraw();
+    }
+
+    private renderSelectionRect(): void {
+        if (!this.selectionRect) return;
+        const r = this.selectionRect;
+        const x = Math.min(r.sx1, r.sx2);
+        const y = Math.min(r.sy1, r.sy2);
+        const w = Math.abs(r.sx2 - r.sx1);
+        const h = Math.abs(r.sy2 - r.sy1);
+
+        this.ctx.save();
+        // Draw in screen space (no camera transform)
+        this.ctx.fillStyle = 'rgba(0, 122, 255, 0.08)';
+        this.ctx.fillRect(x, y, w, h);
+        this.ctx.strokeStyle = 'rgba(0, 122, 255, 0.5)';
+        this.ctx.lineWidth = 1;
+        this.ctx.setLineDash([6, 4]);
+        this.ctx.strokeRect(x, y, w, h);
+        this.ctx.setLineDash([]);
+        this.ctx.restore();
+    }
+
     // --- SELECTION HIGHLIGHT RENDERING ---
     private renderSelectionHighlight(stroke: Stroke): void {
         const points = stroke.points;
@@ -613,6 +682,9 @@ export class GeminiInkRenderer {
         }
 
         this.ctx.restore();
+
+        // v2.2: Selection rectangle overlay (screen space, after camera restore)
+        this.renderSelectionRect();
     }
 
     private drawGrid() {

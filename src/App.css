@@ -502,6 +502,7 @@ input[type=range]::-webkit-slider-runnable-track {
   border-radius: 16px;
   padding: 12px;
   z-index: 1001;
+  pointer-events: auto; /* Override nuance-dock's pointer-events: none */
   animation: popupFadeIn 0.15s ease-out;
 }
 
