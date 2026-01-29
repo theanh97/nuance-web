@@ -7,6 +7,8 @@ export interface Point {
     y: number;
     pressure: number;
     timestamp: number;
+    tiltX: number;  // v1.9.0: Pen tilt in degrees (-90 to 90)
+    tiltY: number;
 }
 
 interface BezierSegment {
@@ -197,15 +199,7 @@ export class GeminiInkRenderer {
         }
     }
 
-    public setFrictionLevel(level: number) {
-        // level: 0.0 (no friction) to 1.0 (max friction)
-        // At 50% slider = 0.4 (noticeable), at 100% = 0.8 (very strong lag)
-        if (this.frictionEngine) {
-            this.frictionEngine.setConfig({
-                baseResistance: level * 0.8
-            });
-        }
-    }
+
 
     /**
      * v1.8.0: Unified Surface Texture control
@@ -407,8 +401,8 @@ export class GeminiInkRenderer {
         this.ctx.restore();
     }
 
-    startStroke(x: number, y: number, pressure: number): void {
-        console.log('[Renderer] startStroke at', x, y, 'pressure:', pressure);
+    startStroke(x: number, y: number, pressure: number, tiltX: number = 0, tiltY: number = 0): void {
+        console.log('[Renderer] startStroke at', x, y, 'pressure:', pressure, 'tilt:', tiltX, tiltY);
         this.isDrawing = true;
         this.blockRedraw = true; // Block any redraw during stroke
 
@@ -427,7 +421,7 @@ export class GeminiInkRenderer {
         this.hapticEngine.triggerImmediate();
 
         const worldPoint = this.screenToWorld(x, y);
-        this.points = [{ x: worldPoint.x, y: worldPoint.y, pressure, timestamp: performance.now() }];
+        this.points = [{ x: worldPoint.x, y: worldPoint.y, pressure, timestamp: performance.now(), tiltX, tiltY }];
 
         // Draw initial point immediately
         this.renderInitialPoint(worldPoint.x, worldPoint.y, pressure);
@@ -467,7 +461,7 @@ export class GeminiInkRenderer {
     // private startWetLoop() { ... }
     // private stopWetLoop() { ... }
 
-    addPoint(x: number, y: number, pressure: number): void {
+    addPoint(x: number, y: number, pressure: number, tiltX: number = 0, tiltY: number = 0): void {
         if (!this.isDrawing) {
             console.log('[Renderer] addPoint ignored - not drawing');
             return;
@@ -479,7 +473,7 @@ export class GeminiInkRenderer {
         const lastPoint = this.points[this.points.length - 1];
         if (!lastPoint) {
             console.log('[Renderer] addPoint - no last point, starting fresh');
-            this.points.push({ x: worldPoint.x, y: worldPoint.y, pressure, timestamp: now });
+            this.points.push({ x: worldPoint.x, y: worldPoint.y, pressure, timestamp: now, tiltX, tiltY });
             this.velocityHistory = []; // Reset velocity history
             return;
         }
@@ -500,7 +494,8 @@ export class GeminiInkRenderer {
                 x: worldPoint.x,
                 y: worldPoint.y,
                 pressure: pressure,
-                timestamp: now
+                timestamp: now,
+                tiltX, tiltY
             };
             this.points.push(rawPoint);
 
@@ -568,7 +563,8 @@ export class GeminiInkRenderer {
             x: lastPoint.x + (frictionResult.adjustedX - lastPoint.x) * k,
             y: lastPoint.y + (frictionResult.adjustedY - lastPoint.y) * k,
             pressure: pressure,
-            timestamp: now
+            timestamp: now,
+            tiltX, tiltY
         };
 
         this.points.push(smoothedPoint);
@@ -629,6 +625,10 @@ export class GeminiInkRenderer {
         this.blockRedraw = false; // Allow redraw again
         // this.stopWetLoop(); // Wet ink disabled
         this.soundEngine.endStroke();
+
+        // v1.8.3: REMOVED post-stroke smoothing - was causing "mushy" feel
+        // Streamline during drawing is sufficient for smooth strokes
+        // Premium pen experience = pen does exactly what user intends
         this.strokes.push({ points: [...this.points], config: { ...this.config } });
         this.redoStack = []; // Clear redo stack when new stroke is added
         this.points = [];
@@ -642,6 +642,10 @@ export class GeminiInkRenderer {
             this.requestRedraw();
         }
     }
+
+    // v1.8.3: Post-stroke smoothing (smoothStrokePoints) REMOVED
+    // Reason: Caused "mushy" feel - double smoothing with streamline during drawing
+    // Decision: Premium pen experience = pen does exactly what user intends
 
     // --- Incremental Tip Rendering - DISABLED FOR NOW ---
     // Kept for future optimization
@@ -802,6 +806,32 @@ export class GeminiInkRenderer {
         const vFactor = 1 - Math.min(1, velocity / 2.5) * config.velocityInfluence;
 
         let width = config.baseStrokeWidth * pFactor * vFactor;
+
+        // v1.9.0: TILT CALLIGRAPHY - pen angle affects stroke width
+        // Like a real calligraphy nib: angle relative to stroke direction changes width
+        if (current.tiltX !== 0 || current.tiltY !== 0) {
+            // Pen tilt angle from vertical (0 = straight up, 90 = flat on surface)
+            const tiltAngle = Math.sqrt(current.tiltX * current.tiltX + current.tiltY * current.tiltY);
+            // Direction the pen is tilting toward (radians)
+            const tiltDirection = Math.atan2(current.tiltY, current.tiltX);
+            // Direction of stroke movement (radians)
+            const strokeDirection = Math.atan2(dy, dx);
+
+            // Angle between tilt direction and stroke direction
+            // When perpendicular → wide stroke (nib catches paper)
+            // When parallel → thin stroke (nib slices through)
+            const angleDiff = Math.abs(tiltDirection - strokeDirection);
+            const normalizedAngle = Math.min(angleDiff, Math.PI - angleDiff) / (Math.PI / 2); // 0-1
+
+            // Tilt magnitude: how much tilt affects width (more tilted = more effect)
+            const tiltMagnitude = Math.min(1, tiltAngle / 60); // Full effect at 60 degrees
+
+            // Apply: perpendicular = wider (up to 1.5x), parallel = thinner (down to 0.6x)
+            const tiltFactor = 0.6 + normalizedAngle * 0.9; // Range: 0.6 to 1.5
+            // Blend based on tilt magnitude (no tilt = no effect)
+            width *= 1 + (tiltFactor - 1) * tiltMagnitude;
+        }
+
         return Math.max(config.minWidth, Math.min(config.maxWidth, width));
     }
 

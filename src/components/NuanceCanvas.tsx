@@ -199,7 +199,7 @@ export const NuanceCanvas = forwardRef<NuanceCanvasHandle, NuanceCanvasProps>(({
             activeDrawingPointer.current = e.pointerId;
 
             const { x, y } = getCanvasCoords(e);
-            rendererRef.current?.startStroke(x, y, e.pressure || 0.5);
+            rendererRef.current?.startStroke(x, y, e.pressure || 0.5, e.tiltX || 0, e.tiltY || 0);
             return;
         }
 
@@ -230,7 +230,7 @@ export const NuanceCanvas = forwardRef<NuanceCanvasHandle, NuanceCanvasProps>(({
             if (isSafari.current) {
                 const x = e.clientX - rect.left;
                 const y = e.clientY - rect.top;
-                rendererRef.current?.addPoint(x, y, e.pressure || 0.5);
+                rendererRef.current?.addPoint(x, y, e.pressure || 0.5, e.tiltX || 0, e.tiltY || 0);
                 return;
             }
 
@@ -242,12 +242,12 @@ export const NuanceCanvas = forwardRef<NuanceCanvasHandle, NuanceCanvasProps>(({
                 for (const pe of coalescedEvents) {
                     const x = pe.clientX - rect.left;
                     const y = pe.clientY - rect.top;
-                    rendererRef.current?.addPoint(x, y, pe.pressure || 0.5);
+                    rendererRef.current?.addPoint(x, y, pe.pressure || 0.5, pe.tiltX || 0, pe.tiltY || 0);
                 }
             } else {
                 const x = e.clientX - rect.left;
                 const y = e.clientY - rect.top;
-                rendererRef.current?.addPoint(x, y, e.pressure || 0.5);
+                rendererRef.current?.addPoint(x, y, e.pressure || 0.5, e.tiltX || 0, e.tiltY || 0);
             }
             return;
         }
